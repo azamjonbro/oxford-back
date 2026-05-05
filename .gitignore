@@ -1,8 +1,9 @@
 node_modules/
-.env/
+.env
 dotenv/
 .test.env/
 uploads/
 package-lock.json/
 seed.js/
 
+.env
