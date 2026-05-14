@@ -27,14 +27,21 @@ const upload = multer({
     }
 });
 
-router.post('/', auth, upload.single('image'), (req, res) => {
+router.post('/', auth, (req, res, next) => {
+    console.log('Upload request received');
+    next();
+}, upload.single('image'), (req, res) => {
     try {
+        console.log('File:', req.file);
         if (!req.file) {
+            console.log('No file in request');
             return res.status(400).json({ message: 'No file uploaded' });
         }
         const fileUrl = `/uploads/${req.file.filename}`;
+        console.log('File uploaded successfully:', fileUrl);
         res.json({ url: fileUrl });
     } catch (err) {
+        console.error('Upload error:', err);
         res.status(500).json({ message: err.message });
     }
 });

@@ -11,9 +11,10 @@ const CourseSchema = new mongoose.Schema({
     description: multiLangSchema,
     duration: multiLangSchema,
     category: { type: String },
-    price: { type: Number, required: true },
     image: { type: String },
-    hashtags: [String]
+    hashtags: [String],
+    time: { type: String },
+    seats: { type: Number }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Course', CourseSchema);
