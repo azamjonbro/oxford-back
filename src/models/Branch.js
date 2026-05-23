@@ -11,6 +11,6 @@ const BranchSchema = new mongoose.Schema({
     address: multiLangSchema,
     phone: { type: String },
     images: [{ type: String }]
-}, { timestamps: true });
+, order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Branch', BranchSchema);

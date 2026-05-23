@@ -5,6 +5,6 @@ const MessageSchema = new mongoose.Schema({
     phone: { type: String, required: true },
     text: { type: String },
     status: { type: String, default: 'new' }
-}, { timestamps: true });
+, order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Message', MessageSchema);

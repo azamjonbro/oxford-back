@@ -5,6 +5,6 @@ const ResultSchema = new mongoose.Schema({
     score: { type: String, required: true },
     date: { type: String },
     image: { type: String },
-}, { timestamps: true });
+    order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Result', ResultSchema);

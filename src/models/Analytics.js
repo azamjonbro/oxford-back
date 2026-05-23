@@ -10,6 +10,6 @@ const AnalyticsSchema = new mongoose.Schema({
     ageRange: String, // Calculated/Inferred
     gender: String,   // Calculated/Inferred
     timestamp: { type: Date, default: Date.now }
-}, { timestamps: true });
+, order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Analytics', AnalyticsSchema);

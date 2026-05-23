@@ -59,6 +59,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/oxfort')
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/placement', require('./routes/placement.routes'));
 app.use('/api', apiRoutes);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.get('/api/admin/stats', auth, analyticsController.getStats);

@@ -9,6 +9,6 @@ const multiLangSchema = {
 const FaqSchema = new mongoose.Schema({
     question: multiLangSchema,
     answer: multiLangSchema
-}, { timestamps: true });
+, order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Faq', FaqSchema);

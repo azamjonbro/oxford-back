@@ -15,6 +15,6 @@ const CourseSchema = new mongoose.Schema({
     hashtags: [String],
     time: { type: String },
     seats: { type: Number }
-}, { timestamps: true });
+, order: { type: Number, default: 0 } }, { timestamps: true });
 
 module.exports = mongoose.model('Course', CourseSchema);
