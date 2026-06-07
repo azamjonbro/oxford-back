@@ -4,6 +4,7 @@ const TestResultSchema = new mongoose.Schema({
     lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', required: true },
     score: { type: Number, default: 0 }, // 0 to 100 percentage score
     level: { type: String, default: 'Beginner' },
+    testLevel: { type: String }, // Level assigned by admin at registration (e.g. Beginner, Intermediate)
     answers: [{
         questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Question', required: true },
         selectedAnswers: [{ type: String }], // Array of strings (handles single/multiple choice and text entries)

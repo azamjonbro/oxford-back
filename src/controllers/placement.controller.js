@@ -11,7 +11,8 @@ const registerTestSchema = Joi.object({
     email: Joi.string().trim().email().allow('').optional(),
     candidateType: Joi.string().valid('insider', 'outsider').required(),
     preferredStudyTime: Joi.string().valid('morning', 'afternoon', 'evening').required(),
-    branch: Joi.string().hex().length(24).allow('').optional()
+    branch: Joi.string().hex().length(24).allow('').optional(),
+    testLevel: Joi.string().valid('Beginner', 'Elementary', 'Pre-Intermediate', 'Intermediate', 'Upper-Intermediate', 'IELTS Foundation').allow('').optional()
 });
 
 // Helper function to send Telegram alerts using native HTTPS module
@@ -141,7 +142,7 @@ exports.registerTest = async (req, res) => {
         const { error } = registerTestSchema.validate(req.body);
         if (error) return res.status(400).json({ message: error.details[0].message });
 
-        const { name, phone, age, telegram, email, candidateType, preferredStudyTime, branch } = req.body;
+        const { name, phone, age, telegram, email, candidateType, preferredStudyTime, branch, testLevel } = req.body;
 
         // Check if there is an existing in-progress test for this phone
         let lead = await Lead.findOne({ phone }).populate({
@@ -152,7 +153,11 @@ exports.registerTest = async (req, res) => {
         if (lead && lead.testResult) {
             // Already has an active test, let's resume it
             const activeTest = lead.testResult;
-            const rawQuestions = await Question.find({}).sort({ order: 1 });
+            const query = {};
+            if (activeTest.testLevel) {
+                query.category = activeTest.testLevel === 'IELTS Foundation' ? 'IELTS' : activeTest.testLevel;
+            }
+            const rawQuestions = await Question.find(query).sort({ order: 1 });
             // Strip correct answers
             const cleanQuestions = rawQuestions.map(q => {
                 const { correctAnswers, ...clean } = q.toObject();
@@ -194,7 +199,8 @@ exports.registerTest = async (req, res) => {
             lead: lead._id,
             completionStatus: 'in-progress',
             startedAt: new Date(),
-            answers: []
+            answers: [],
+            testLevel: testLevel || ''
         });
         await testResult.save();
 
@@ -202,8 +208,12 @@ exports.registerTest = async (req, res) => {
         lead.testResult = testResult._id;
         await lead.save();
 
-        // Fetch questions
-        const rawQuestions = await Question.find({}).sort({ order: 1 });
+        // Fetch questions for assigned level
+        const query = {};
+        if (testLevel) {
+            query.category = testLevel === 'IELTS Foundation' ? 'IELTS' : testLevel;
+        }
+        const rawQuestions = await Question.find(query).sort({ order: 1 });
         
         // Randomize/shuffle questions within their order/category to fulfill randomized order requirement
         // We will shuffle the array but keep order intact if order is specified, otherwise fully randomized
@@ -277,7 +287,11 @@ exports.resumeTest = async (req, res) => {
         }
 
         const activeTest = lead.testResult;
-        const rawQuestions = await Question.find({}).sort({ order: 1 });
+        const query = {};
+        if (activeTest.testLevel) {
+            query.category = activeTest.testLevel === 'IELTS Foundation' ? 'IELTS' : activeTest.testLevel;
+        }
+        const rawQuestions = await Question.find(query).sort({ order: 1 });
         const cleanQuestions = rawQuestions.map(q => {
             const { correctAnswers, ...clean } = q.toObject();
             return clean;
