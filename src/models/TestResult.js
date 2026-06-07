@@ -13,7 +13,27 @@ const TestResultSchema = new mongoose.Schema({
     startedAt: { type: Date, default: Date.now },
     completedAt: { type: Date },
     timeSpent: { type: Number, default: 0 }, // in seconds
-    warnings: { type: Number, default: 0 } // tab-switching count for anti-cheat
+    warnings: { type: Number, default: 0 }, // tab-switching count for anti-cheat
+    
+    // Detailed Section Scores
+    grammarScore: { type: Number, default: 0 }, // Out of 20
+    vocabularyScore: { type: Number, default: 0 }, // Out of 20
+    mistakeScore: { type: Number, default: 0 }, // Out of 10
+    sentenceScore: { type: Number, default: 0 }, // Out of 10
+    readingScore: { type: Number, default: 0 }, // Out of 10
+    listeningScore: { type: Number, default: 0 }, // Out of 10
+    writingScore: { type: Number, default: 0 }, // Out of 10
+    essayScore: { type: Number, default: 0 }, // Out of 10
+    speakingScore: { type: Number, default: 0 }, // Out of 10
+    
+    // Text responses cached for easier rendering
+    writingText: { type: String, default: '' },
+    essayText: { type: String, default: '' },
+    
+    // Manual review tracking
+    writingGraded: { type: Boolean, default: false },
+    essayGraded: { type: Boolean, default: false },
+    speakingGraded: { type: Boolean, default: false }
 }, { timestamps: true });
 
 module.exports = mongoose.model('TestResult', TestResultSchema);

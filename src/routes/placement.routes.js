@@ -13,6 +13,8 @@ router.get('/resume/:phone', studentController.resumeTest);
 // Admin Lead & Placement Test Management Routes (JWT Protected)
 router.get('/admin/leads', auth, adminController.getLeads);
 router.put('/admin/leads/:id', auth, adminController.updateLeadStatus);
+router.put('/admin/leads/:id/grade', auth, adminController.gradeStudentTest);
+router.put('/admin/leads/:id/assign-group', auth, adminController.assignGroup);
 router.delete('/admin/leads/:id', auth, adminController.deleteLead);
 router.get('/admin/export/csv', auth, adminController.exportLeadsCSV);
 router.get('/admin/analytics', auth, adminController.getAnalytics);

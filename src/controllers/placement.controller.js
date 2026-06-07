@@ -8,6 +8,9 @@ const registerTestSchema = Joi.object({
     phone: Joi.string().trim().min(7).max(20).required(),
     age: Joi.number().integer().min(5).max(100).required(),
     telegram: Joi.string().trim().allow('').optional(),
+    email: Joi.string().trim().email().allow('').optional(),
+    candidateType: Joi.string().valid('insider', 'outsider').required(),
+    preferredStudyTime: Joi.string().valid('morning', 'afternoon', 'evening').required(),
     branch: Joi.string().hex().length(24).allow('').optional()
 });
 
@@ -30,6 +33,9 @@ async function sendTelegramAlert(lead, score, level, timeSpent, warnings) {
             `📞 *Phone*: ${lead.phone}\n` +
             `🎂 *Age*: ${lead.age}\n` +
             `✈️ *Telegram*: ${lead.telegram || 'N/A'}\n` +
+            `📧 *Email*: ${lead.email || 'N/A'}\n` +
+            `🏷️ *Type*: ${lead.candidateType || 'N/A'}\n` +
+            `⏰ *Study Time*: ${lead.preferredStudyTime || 'N/A'}\n` +
             `🏫 *Branch*: ${lead.branch ? 'Selected' : 'N/A'}\n\n` +
             `📊 *Score*: ${score}%\n` +
             `🎓 *Level*: *${level}*\n` +
@@ -110,6 +116,9 @@ async function sendEmailAlert(lead, score, level) {
                     <p><strong>Name:</strong> ${lead.name}</p>
                     <p><strong>Phone:</strong> ${lead.phone}</p>
                     <p><strong>Age:</strong> ${lead.age}</p>
+                    <p><strong>Email:</strong> ${lead.email || 'N/A'}</p>
+                    <p><strong>Candidate Type:</strong> ${lead.candidateType || 'N/A'}</p>
+                    <p><strong>Preferred Study Time:</strong> ${lead.preferredStudyTime || 'N/A'}</p>
                     <p><strong>Telegram:</strong> ${lead.telegram || 'N/A'}</p>
                     <hr />
                     <p><strong>Score:</strong> ${score}%</p>
@@ -132,7 +141,7 @@ exports.registerTest = async (req, res) => {
         const { error } = registerTestSchema.validate(req.body);
         if (error) return res.status(400).json({ message: error.details[0].message });
 
-        const { name, phone, age, telegram, branch } = req.body;
+        const { name, phone, age, telegram, email, candidateType, preferredStudyTime, branch } = req.body;
 
         // Check if there is an existing in-progress test for this phone
         let lead = await Lead.findOne({ phone }).populate({
@@ -167,6 +176,9 @@ exports.registerTest = async (req, res) => {
             phone,
             age,
             telegram,
+            email: email || '',
+            candidateType,
+            preferredStudyTime,
             branch: branch || null,
             status: 'New',
             deviceInfo: {
@@ -289,6 +301,29 @@ exports.resumeTest = async (req, res) => {
     }
 };
 
+// Helper grading heuristics for writing and essay
+function gradeWritingLength(text) {
+    if (!text || typeof text !== 'string') return 0;
+    const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    if (wordCount === 0) return 0;
+    if (wordCount < 30) return 2;
+    if (wordCount >= 30 && wordCount < 50) return 6;
+    if (wordCount >= 50 && wordCount <= 70) return 10;
+    if (wordCount > 70 && wordCount <= 90) return 8;
+    return 5;
+}
+
+function gradeEssayLength(text) {
+    if (!text || typeof text !== 'string') return 0;
+    const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+    if (wordCount === 0) return 0;
+    if (wordCount < 100) return 2;
+    if (wordCount >= 100 && wordCount < 150) return 6;
+    if (wordCount >= 150 && wordCount <= 250) return 10;
+    if (wordCount > 250 && wordCount <= 300) return 8;
+    return 5;
+}
+
 // Submit and Grade Placement Test
 exports.submitTest = async (req, res) => {
     try {
@@ -307,8 +342,17 @@ exports.submitTest = async (req, res) => {
             questionMap[q._id.toString()] = q;
         });
 
-        let correctCount = 0;
-        const totalQuestions = questions.length || 1;
+        let grammarScore = 0;
+        let vocabularyScore = 0;
+        let mistakeScore = 0;
+        let sentenceScore = 0;
+        let readingScore = 0;
+        let listeningScore = 0;
+        let writingScore = 0;
+        let essayScore = 0;
+
+        let writingText = '';
+        let essayText = '';
 
         // Grade each answer in testResult
         const gradedAnswers = testResult.answers.map(ans => {
@@ -316,24 +360,41 @@ exports.submitTest = async (req, res) => {
             let isCorrect = false;
 
             if (dbQuestion) {
-                const correctAnswers = dbQuestion.correctAnswers.map(c => c.trim().toLowerCase());
-                const studentAnswers = ans.selectedAnswers.map(s => s.trim().toLowerCase());
+                // If it is Writing or Essay, it's not a correct/incorrect match, it is manual text
+                if (dbQuestion.section === 'writing') {
+                    writingText = ans.selectedAnswers[0] || '';
+                    writingScore = gradeWritingLength(writingText);
+                } else if (dbQuestion.section === 'essay') {
+                    essayText = ans.selectedAnswers[0] || '';
+                    essayScore = gradeEssayLength(essayText);
+                } else {
+                    const correctAnswers = dbQuestion.correctAnswers.map(c => c.trim().toLowerCase());
+                    const studentAnswers = ans.selectedAnswers.map(s => s.trim().toLowerCase());
 
-                if (dbQuestion.type === 'single' || dbQuestion.type === 'multiple') {
-                    // Match sets of correct answers
-                    if (correctAnswers.length === studentAnswers.length &&
-                        correctAnswers.every(val => studentAnswers.includes(val))) {
-                        isCorrect = true;
+                    if (dbQuestion.type === 'single' || dbQuestion.type === 'multiple') {
+                        // Match sets of correct answers
+                        if (correctAnswers.length === studentAnswers.length &&
+                            correctAnswers.every(val => studentAnswers.includes(val))) {
+                            isCorrect = true;
+                        }
+                    } else if (dbQuestion.type === 'text') {
+                        // Text match (compare first answer item)
+                        if (correctAnswers.length > 0 && studentAnswers.length > 0) {
+                            isCorrect = correctAnswers.includes(studentAnswers[0]);
+                        }
                     }
-                } else if (dbQuestion.type === 'text') {
-                    // Text match (compare first answer item)
-                    if (correctAnswers.length > 0 && studentAnswers.length > 0) {
-                        isCorrect = correctAnswers.includes(studentAnswers[0]);
+
+                    if (isCorrect) {
+                        if (dbQuestion.section === 'grammar') grammarScore++;
+                        else if (dbQuestion.section === 'vocabulary') vocabularyScore++;
+                        else if (dbQuestion.section === 'mistake') mistakeScore++;
+                        else if (dbQuestion.section === 'sentence') sentenceScore++;
+                        else if (dbQuestion.section === 'reading') readingScore++;
+                        else if (dbQuestion.section === 'listening') listeningScore++;
                     }
                 }
             }
 
-            if (isCorrect) correctCount++;
             return {
                 questionId: ans.questionId,
                 selectedAnswers: ans.selectedAnswers,
@@ -341,17 +402,25 @@ exports.submitTest = async (req, res) => {
             };
         });
 
-        // Calculate score percentage
-        const scorePercentage = Math.round((correctCount / totalQuestions) * 100);
+        // Cap auto-scored sections at their max capacities just in case
+        grammarScore = Math.min(grammarScore, 20);
+        vocabularyScore = Math.min(vocabularyScore, 20);
+        mistakeScore = Math.min(mistakeScore, 10);
+        sentenceScore = Math.min(sentenceScore, 10);
+        readingScore = Math.min(readingScore, 10);
+        listeningScore = Math.min(listeningScore, 10);
+
+        // Calculate total score out of 100 points
+        const totalScore = grammarScore + vocabularyScore + mistakeScore + sentenceScore + readingScore + listeningScore + writingScore + essayScore;
 
         // Fetch custom ranges from Setting table
         const defaultRanges = [
             { name: 'Beginner', min: 0, max: 20, recommendation: 'We recommend starting from the basics to build a strong foundation.' },
             { name: 'Elementary', min: 21, max: 40, recommendation: 'You have basic communication skills. Let\'s boost your speaking and grammar!' },
             { name: 'Pre-Intermediate', min: 41, max: 60, recommendation: 'Great progress! You can understand familiar topics. Let\'s aim for intermediate fluency.' },
-            { name: 'Intermediate', min: 61, max: 80, recommendation: 'Excellent! You can express yourself in various contexts. Let\'s refine your advanced skills.' },
-            { name: 'Upper-Intermediate', min: 81, max: 90, recommendation: 'Impressive score! You are very close to high fluency. Let\'s prepare for IELTS or business English.' },
-            { name: 'IELTS Ready', min: 91, max: 100, recommendation: 'Outstanding! You possess advanced English skills. You are fully ready for intensive IELTS prep!' }
+            { name: 'Intermediate', min: 61, max: 75, recommendation: 'Excellent! You can express yourself in various contexts. Let\'s refine your advanced skills.' },
+            { name: 'Upper-Intermediate', min: 76, max: 88, recommendation: 'Impressive score! You are very close to high fluency. Let\'s prepare for IELTS or business English.' },
+            { name: 'IELTS Foundation', min: 89, max: 100, recommendation: 'Outstanding! You possess advanced English skills. You are fully ready for intensive IELTS prep!' }
         ];
 
         const levelsSetting = await Setting.findOne({ key: 'placement_test_levels' });
@@ -368,7 +437,7 @@ exports.submitTest = async (req, res) => {
         let studentLevel = 'Beginner';
         let recommendation = 'We recommend starting from the basics to build a strong foundation.';
         for (const range of levelRanges) {
-            if (scorePercentage >= range.min && scorePercentage <= range.max) {
+            if (totalScore >= range.min && totalScore <= range.max) {
                 studentLevel = range.name;
                 recommendation = range.recommendation;
                 break;
@@ -377,10 +446,23 @@ exports.submitTest = async (req, res) => {
 
         // Save results
         testResult.answers = gradedAnswers;
-        testResult.score = scorePercentage;
+        testResult.score = totalScore;
         testResult.level = studentLevel;
         testResult.completionStatus = 'completed';
         testResult.completedAt = new Date();
+
+        testResult.grammarScore = grammarScore;
+        testResult.vocabularyScore = vocabularyScore;
+        testResult.mistakeScore = mistakeScore;
+        testResult.sentenceScore = sentenceScore;
+        testResult.readingScore = readingScore;
+        testResult.listeningScore = listeningScore;
+        testResult.writingScore = writingScore;
+        testResult.essayScore = essayScore;
+
+        testResult.writingText = writingText;
+        testResult.essayText = essayText;
+
         if (typeof timeSpent === 'number') testResult.timeSpent = timeSpent;
         if (typeof warnings === 'number') testResult.warnings = warnings;
         await testResult.save();
@@ -389,14 +471,22 @@ exports.submitTest = async (req, res) => {
         const lead = await Lead.findById(testResult.lead).populate('branch');
 
         // Trigger Alerts
-        await sendTelegramAlert(lead, scorePercentage, studentLevel, testResult.timeSpent, testResult.warnings);
-        await sendEmailAlert(lead, scorePercentage, studentLevel);
+        await sendTelegramAlert(lead, totalScore, studentLevel, testResult.timeSpent, testResult.warnings);
+        await sendEmailAlert(lead, totalScore, studentLevel);
 
         res.json({
-            score: scorePercentage,
+            score: totalScore,
             level: studentLevel,
-            correctCount,
-            totalQuestions,
+            grammarScore,
+            vocabularyScore,
+            mistakeScore,
+            sentenceScore,
+            readingScore,
+            listeningScore,
+            writingScore,
+            essayScore,
+            writingText,
+            essayText,
             recommendation
         });
     } catch (err) {

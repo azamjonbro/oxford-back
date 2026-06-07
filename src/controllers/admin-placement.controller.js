@@ -221,3 +221,105 @@ exports.getAnalytics = async (req, res) => {
         res.status(500).json({ message: err.message });
     }
 };
+
+// Admin manually grades Writing, Essay, and Speaking scores
+exports.gradeStudentTest = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { writingScore, essayScore, speakingScore } = req.body;
+
+        const lead = await Lead.findById(id).populate('testResult');
+        if (!lead) return res.status(404).json({ message: 'Lead not found' });
+        if (!lead.testResult) return res.status(404).json({ message: 'No test result found for this candidate' });
+
+        const testResult = lead.testResult;
+
+        if (typeof writingScore === 'number') {
+            testResult.writingScore = Math.min(Math.max(writingScore, 0), 10);
+            testResult.writingGraded = true;
+        }
+        if (typeof essayScore === 'number') {
+            testResult.essayScore = Math.min(Math.max(essayScore, 0), 10);
+            testResult.essayGraded = true;
+        }
+        if (typeof speakingScore === 'number') {
+            testResult.speakingScore = Math.min(Math.max(speakingScore, 0), 10);
+            testResult.speakingGraded = true;
+        }
+
+        // Recalculate total score (Grammar + Vocabulary + Mistake + Sentence + Reading + Listening + Writing + Essay)
+        const totalScore = testResult.grammarScore + testResult.vocabularyScore + testResult.mistakeScore + testResult.sentenceScore + testResult.readingScore + testResult.listeningScore + testResult.writingScore + testResult.essayScore;
+        testResult.score = totalScore;
+
+        // Determine Level based on new score
+        const defaultRanges = [
+            { name: 'Beginner', min: 0, max: 20, recommendation: 'We recommend starting from the basics to build a strong foundation.' },
+            { name: 'Elementary', min: 21, max: 40, recommendation: 'You have basic communication skills. Let\'s boost your speaking and grammar!' },
+            { name: 'Pre-Intermediate', min: 41, max: 60, recommendation: 'Great progress! You can understand familiar topics. Let\'s aim for intermediate fluency.' },
+            { name: 'Intermediate', min: 61, max: 75, recommendation: 'Excellent! You can express yourself in various contexts. Let\'s refine your advanced skills.' },
+            { name: 'Upper-Intermediate', min: 76, max: 88, recommendation: 'Impressive score! You are very close to high fluency. Let\'s prepare for IELTS or business English.' },
+            { name: 'IELTS Foundation', min: 89, max: 100, recommendation: 'Outstanding! You possess advanced English skills. You are fully ready for intensive IELTS prep!' }
+        ];
+
+        let levelRanges = defaultRanges;
+        const { Setting } = require('../models');
+        const levelsSetting = await Setting.findOne({ key: 'placement_test_levels' });
+        if (levelsSetting && levelsSetting.value) {
+            try {
+                levelRanges = JSON.parse(levelsSetting.value);
+            } catch (e) {}
+        }
+
+        let studentLevel = 'Beginner';
+        for (const range of levelRanges) {
+            if (totalScore >= range.min && totalScore <= range.max) {
+                studentLevel = range.name;
+                break;
+            }
+        }
+
+        testResult.level = studentLevel;
+        await testResult.save();
+
+        // Populate and return lead
+        const updatedLead = await Lead.findById(id).populate('branch').populate('testResult');
+        res.json(updatedLead);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: err.message });
+    }
+};
+
+// Admin assigns student to a group based on test score
+exports.assignGroup = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { groupName, branch } = req.body;
+
+        if (!groupName || typeof groupName !== 'string' || !groupName.trim()) {
+            return res.status(400).json({ message: 'Group name is required.' });
+        }
+
+        const updateData = {
+            assignedGroup: groupName.trim(),
+            assignedAt: new Date(),
+            status: 'Registered' // Auto-set status to Registered when assigned
+        };
+
+        // Optionally update branch assignment too
+        if (branch) {
+            updateData.branch = branch;
+        }
+
+        const lead = await Lead.findByIdAndUpdate(id, updateData, { new: true })
+            .populate('branch')
+            .populate('testResult');
+
+        if (!lead) return res.status(404).json({ message: 'Lead not found' });
+
+        res.json(lead);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: err.message });
+    }
+};
