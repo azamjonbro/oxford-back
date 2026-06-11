@@ -341,7 +341,7 @@ function gradeEssayLength(text) {
 // Submit and Grade Placement Test
 exports.submitTest = async (req, res) => {
     try {
-        const { testResultId, timeSpent, warnings } = req.body;
+        const { testResultId, timeSpent, warnings, adminLevel } = req.body;
 
         const testResult = await TestResult.findById(testResultId);
         if (!testResult) return res.status(404).json({ message: 'Test session not found' });
@@ -458,10 +458,19 @@ exports.submitTest = async (req, res) => {
             }
         }
 
+        const finalLevel = adminLevel || studentLevel;
+        if (adminLevel) {
+            const matchedRange = levelRanges.find(r => r.name.toLowerCase() === adminLevel.toLowerCase());
+            if (matchedRange) {
+                recommendation = matchedRange.recommendation;
+            }
+        }
+
         // Save results
         testResult.answers = gradedAnswers;
         testResult.score = totalScore;
-        testResult.level = studentLevel;
+        testResult.level = finalLevel;
+        testResult.adminLevel = adminLevel || '';
         testResult.completionStatus = 'completed';
         testResult.completedAt = new Date();
 
