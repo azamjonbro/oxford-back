@@ -6,6 +6,12 @@ const TestResultSchema = new mongoose.Schema({
     level: { type: String, default: 'Beginner' },
     testLevel: { type: String }, // Level assigned by admin at registration (e.g. Beginner, Intermediate)
     adminLevel: { type: String }, // Level assigned by admin at final submission
+    
+    // New Scoring Logic
+    earnedPoints: { type: Number, default: 0 },
+    totalPoints: { type: Number, default: 0 },
+    percentage: { type: Number, default: 0 },
+    resultStatus: { type: String, enum: ['FAILED', 'ELEMENTARY', 'INTERMEDIATE', 'ADVANCED', ''], default: '' },
 
     answers: [{
         questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Question', required: true },

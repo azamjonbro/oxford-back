@@ -28,6 +28,10 @@ exports.create = (modelName) => async (req, res) => {
             delete data.branch;
         }
 
+        if (modelName === 'Teacher' && data.category !== 'teacher') {
+            data.ieltsScore = null;
+        }
+
         const newItem = new Model(data);
         await newItem.save();
         res.status(201).json(newItem);
@@ -42,6 +46,9 @@ exports.update = (modelName) => async (req, res) => {
         const data = { ...req.body };
         if (data.branch === '' || data.branch === null) {
             delete data.branch;
+        }
+        if (modelName === 'Teacher' && data.category !== 'teacher') {
+            data.ieltsScore = null;
         }
         const updatedItem = await Model.findByIdAndUpdate(req.params.id, data, { new: true });
         res.json(updatedItem);

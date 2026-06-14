@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const genericController = require('../controllers/generic.controller');
 const settingsController = require('../controllers/settings.controller');
+const contactController = require('../controllers/contact.controller');
 const auth = require('../middlewares/auth');
 
 const resourceMap = {
@@ -22,7 +23,10 @@ const resourceMap = {
 router.get('/settings', settingsController.getSettings);
 router.post('/settings/bulk', auth, settingsController.updateSettingsBulk);
 
-// 2. Generic routes
+// 2. Public forms endpoints
+router.post('/contact', contactController.submitContactForm);
+
+// 3. Generic routes
 Object.entries(resourceMap).forEach(([path, modelName]) => {
     router.get(`/${path}`, genericController.getAll(modelName));
     router.post(`/${path}`, auth, genericController.create(modelName));

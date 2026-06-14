@@ -9,6 +9,7 @@ const QuestionSchema = new mongoose.Schema({
     category: { type: String, required: true }, // Beginner, Elementary, Pre-Intermediate, Intermediate, Upper-Intermediate, IELTS
     audioUrl: { type: String }, // for listening questions
     passage: { type: String }, // for reading section passages
+    points: { type: Number, default: 1 }, // default points for the question
     order: { type: Number, default: 0 }
 }, { timestamps: true });
 

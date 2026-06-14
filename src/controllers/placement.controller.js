@@ -1,4 +1,5 @@
 const { Lead, TestResult, Question, Section, Setting } = require('../models');
+const telegramService = require('../services/telegram.service');
 const https = require('https');
 const Joi = require('joi');
 
@@ -15,72 +16,7 @@ const registerTestSchema = Joi.object({
     testLevel: Joi.string().valid('Beginner', 'Elementary', 'Pre-Intermediate', 'Intermediate', 'Upper-Intermediate', 'IELTS Foundation').allow('').optional()
 });
 
-// Helper function to send Telegram alerts using native HTTPS module
-async function sendTelegramAlert(lead, score, level, timeSpent, warnings) {
-    try {
-        const tokenSetting = await Setting.findOne({ key: 'telegram_bot_token' });
-        const chatIdSetting = await Setting.findOne({ key: 'telegram_chat_id' });
-        if (!tokenSetting?.value || !chatIdSetting?.value) {
-            console.log('Telegram credentials not configured. Skipping alert.');
-            return;
-        }
-
-        const minutes = Math.floor(timeSpent / 60);
-        const seconds = timeSpent % 60;
-        const timeStr = `${minutes}m ${seconds}s`;
-
-        const message = `🔔 *New Placement Test Completed!*\n\n` +
-            `👤 *Name*: ${lead.name}\n` +
-            `📞 *Phone*: ${lead.phone}\n` +
-            `🎂 *Age*: ${lead.age}\n` +
-            `✈️ *Telegram*: ${lead.telegram || 'N/A'}\n` +
-            `📧 *Email*: ${lead.email || 'N/A'}\n` +
-            `🏷️ *Type*: ${lead.candidateType || 'N/A'}\n` +
-            `⏰ *Study Time*: ${lead.preferredStudyTime || 'N/A'}\n` +
-            `🏫 *Branch*: ${lead.branch ? 'Selected' : 'N/A'}\n\n` +
-            `📊 *Score*: ${score}%\n` +
-            `🎓 *Level*: *${level}*\n` +
-            `⏱️ *Time Spent*: ${timeStr}\n` +
-            `⚠️ *Tab Switches (Anti-cheat)*: ${warnings}\n` +
-            `📅 *Date*: ${new Date().toLocaleString()}`;
-
-        const postData = JSON.stringify({
-            chat_id: chatIdSetting.value,
-            text: message,
-            parse_mode: 'Markdown'
-        });
-
-        const url = `https://api.telegram.org/bot${tokenSetting.value}/sendMessage`;
-        const parsedUrl = new URL(url);
-
-        const options = {
-            hostname: parsedUrl.hostname,
-            path: parsedUrl.pathname,
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
-            }
-        };
-
-        const req = https.request(options, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                console.log('Telegram response:', body);
-            });
-        });
-
-        req.on('error', (err) => {
-            console.error('Telegram request error:', err.message);
-        });
-
-        req.write(postData);
-        req.end();
-    } catch (err) {
-        console.error('Failed to send Telegram alert:', err.message);
-    }
-}
+// Telegram alerts now use telegramService
 
 // Helper to trigger email (logs as mock by default, or uses nodemailer if installed)
 async function sendEmailAlert(lead, score, level) {
@@ -349,139 +285,70 @@ exports.submitTest = async (req, res) => {
             return res.status(400).json({ message: 'Test has already been completed.' });
         }
 
-        // Fetch questions and create map for fast grading
         const questions = await Question.find({});
         const questionMap = {};
         questions.forEach(q => {
             questionMap[q._id.toString()] = q;
         });
 
-        let grammarScore = 0;
-        let vocabularyScore = 0;
-        let mistakeScore = 0;
-        let sentenceScore = 0;
-        let readingScore = 0;
-        let listeningScore = 0;
-        let writingScore = 0;
-        let essayScore = 0;
-
+        let earnedPoints = 0;
+        let totalPoints = 0;
         let writingText = '';
         let essayText = '';
 
-        // Grade each answer in testResult
         const gradedAnswers = testResult.answers.map(ans => {
             const dbQuestion = questionMap[ans.questionId.toString()];
             let isCorrect = false;
+            let qPoints = dbQuestion && dbQuestion.points ? dbQuestion.points : 1;
 
             if (dbQuestion) {
-                // If it is Writing or Essay, it's not a correct/incorrect match, it is manual text
+                totalPoints += qPoints;
                 if (dbQuestion.section === 'writing') {
                     writingText = ans.selectedAnswers[0] || '';
-                    writingScore = gradeWritingLength(writingText);
+                    if (writingText.length > 50) { isCorrect = true; earnedPoints += qPoints; }
                 } else if (dbQuestion.section === 'essay') {
                     essayText = ans.selectedAnswers[0] || '';
-                    essayScore = gradeEssayLength(essayText);
+                    if (essayText.length > 100) { isCorrect = true; earnedPoints += qPoints; }
                 } else {
                     const correctAnswers = dbQuestion.correctAnswers.map(c => c.trim().toLowerCase());
                     const studentAnswers = ans.selectedAnswers.map(s => s.trim().toLowerCase());
 
                     if (dbQuestion.type === 'single' || dbQuestion.type === 'multiple') {
-                        // Match sets of correct answers
                         if (correctAnswers.length === studentAnswers.length &&
                             correctAnswers.every(val => studentAnswers.includes(val))) {
                             isCorrect = true;
                         }
                     } else if (dbQuestion.type === 'text') {
-                        // Text match (compare first answer item)
                         if (correctAnswers.length > 0 && studentAnswers.length > 0) {
                             isCorrect = correctAnswers.includes(studentAnswers[0]);
                         }
                     }
 
-                    if (isCorrect) {
-                        if (dbQuestion.section === 'grammar') grammarScore++;
-                        else if (dbQuestion.section === 'vocabulary') vocabularyScore++;
-                        else if (dbQuestion.section === 'mistake') mistakeScore++;
-                        else if (dbQuestion.section === 'sentence') sentenceScore++;
-                        else if (dbQuestion.section === 'reading') readingScore++;
-                        else if (dbQuestion.section === 'listening') listeningScore++;
-                    }
+                    if (isCorrect) earnedPoints += qPoints;
                 }
             }
 
-            return {
-                questionId: ans.questionId,
-                selectedAnswers: ans.selectedAnswers,
-                isCorrect
-            };
+            return { questionId: ans.questionId, selectedAnswers: ans.selectedAnswers, isCorrect };
         });
 
-        // Cap auto-scored sections at their max capacities just in case
-        grammarScore = Math.min(grammarScore, 20);
-        vocabularyScore = Math.min(vocabularyScore, 20);
-        mistakeScore = Math.min(mistakeScore, 10);
-        sentenceScore = Math.min(sentenceScore, 10);
-        readingScore = Math.min(readingScore, 10);
-        listeningScore = Math.min(listeningScore, 10);
+        const percentage = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
+        
+        let resultStatus = 'FAILED';
+        if (percentage >= 50 && percentage < 70) resultStatus = 'ELEMENTARY';
+        else if (percentage >= 70 && percentage < 90) resultStatus = 'INTERMEDIATE';
+        else if (percentage >= 90) resultStatus = 'ADVANCED';
 
-        // Calculate total score out of 100 points
-        const totalScore = grammarScore + vocabularyScore + mistakeScore + sentenceScore + readingScore + listeningScore + writingScore + essayScore;
+        const finalLevel = adminLevel || resultStatus;
 
-        // Fetch custom ranges from Setting table
-        const defaultRanges = [
-            { name: 'Beginner', min: 0, max: 20, recommendation: 'We recommend starting from the basics to build a strong foundation.' },
-            { name: 'Elementary', min: 21, max: 40, recommendation: 'You have basic communication skills. Let\'s boost your speaking and grammar!' },
-            { name: 'Pre-Intermediate', min: 41, max: 60, recommendation: 'Great progress! You can understand familiar topics. Let\'s aim for intermediate fluency.' },
-            { name: 'Intermediate', min: 61, max: 75, recommendation: 'Excellent! You can express yourself in various contexts. Let\'s refine your advanced skills.' },
-            { name: 'Upper-Intermediate', min: 76, max: 88, recommendation: 'Impressive score! You are very close to high fluency. Let\'s prepare for IELTS or business English.' },
-            { name: 'IELTS Foundation', min: 89, max: 100, recommendation: 'Outstanding! You possess advanced English skills. You are fully ready for intensive IELTS prep!' }
-        ];
-
-        const levelsSetting = await Setting.findOne({ key: 'placement_test_levels' });
-        let levelRanges = defaultRanges;
-        if (levelsSetting && levelsSetting.value) {
-            try {
-                levelRanges = JSON.parse(levelsSetting.value);
-            } catch (e) {
-                console.error('Failed to parse levels setting JSON:', e.message);
-            }
-        }
-
-        // Determine Level
-        let studentLevel = 'Beginner';
-        let recommendation = 'We recommend starting from the basics to build a strong foundation.';
-        for (const range of levelRanges) {
-            if (totalScore >= range.min && totalScore <= range.max) {
-                studentLevel = range.name;
-                recommendation = range.recommendation;
-                break;
-            }
-        }
-
-        const finalLevel = adminLevel || studentLevel;
-        if (adminLevel) {
-            const matchedRange = levelRanges.find(r => r.name.toLowerCase() === adminLevel.toLowerCase());
-            if (matchedRange) {
-                recommendation = matchedRange.recommendation;
-            }
-        }
-
-        // Save results
         testResult.answers = gradedAnswers;
-        testResult.score = totalScore;
+        testResult.earnedPoints = earnedPoints;
+        testResult.totalPoints = totalPoints;
+        testResult.percentage = percentage;
+        testResult.resultStatus = resultStatus;
         testResult.level = finalLevel;
         testResult.adminLevel = adminLevel || '';
         testResult.completionStatus = 'completed';
         testResult.completedAt = new Date();
-
-        testResult.grammarScore = grammarScore;
-        testResult.vocabularyScore = vocabularyScore;
-        testResult.mistakeScore = mistakeScore;
-        testResult.sentenceScore = sentenceScore;
-        testResult.readingScore = readingScore;
-        testResult.listeningScore = listeningScore;
-        testResult.writingScore = writingScore;
-        testResult.essayScore = essayScore;
 
         testResult.writingText = writingText;
         testResult.essayText = essayText;
@@ -490,27 +357,51 @@ exports.submitTest = async (req, res) => {
         if (typeof warnings === 'number') testResult.warnings = warnings;
         await testResult.save();
 
-        // Get populated lead info for alerts
         const lead = await Lead.findById(testResult.lead).populate('branch');
 
-        // Trigger Alerts
-        await sendTelegramAlert(lead, totalScore, studentLevel, testResult.timeSpent, testResult.warnings);
-        await sendEmailAlert(lead, totalScore, studentLevel);
+        const minutes = Math.floor(testResult.timeSpent / 60);
+        const seconds = testResult.timeSpent % 60;
+        const timeStr = `${minutes}m ${seconds}s`;
+
+        const basicMsg = `━━━━━━━━━━━━━━━━━━
+🔔 <b>New Placement Test Completed!</b>
+
+👤 <b>Name:</b> ${lead.name}
+📞 <b>Phone:</b> ${lead.phone}
+📊 <b>Score:</b> ${percentage}% (${earnedPoints}/${totalPoints} points)
+🎓 <b>Level:</b> <b>${resultStatus}</b>
+━━━━━━━━━━━━━━━━━━`;
+
+        const detailedMsg = `━━━━━━━━━━━━━━━━━━
+🔔 <b>New Placement Test Completed (Admin Details)</b>
+
+👤 <b>Name:</b> ${lead.name}
+📞 <b>Phone:</b> ${lead.phone}
+🎂 <b>Age:</b> ${lead.age}
+📊 <b>Score:</b> ${percentage}% (${earnedPoints}/${totalPoints} points)
+🎓 <b>Level:</b> <b>${resultStatus}</b>
+⏱️ <b>Time Spent:</b> ${timeStr}
+⚠️ <b>Warnings:</b> ${testResult.warnings || 0}
+🌐 <b>IP/Device:</b> ${req.ip || 'Unknown'} / ${req.headers['user-agent'] || 'Unknown'}
+
+📝 <b>Writing Text:</b>
+${writingText || 'N/A'}
+--
+📝 <b>Essay Text:</b>
+${essayText || 'N/A'}
+━━━━━━━━━━━━━━━━━━`;
+
+        telegramService.sendChannelMessage(basicMsg).catch(err => console.error(err));
+        telegramService.sendAdminMessage(detailedMsg).catch(err => console.error(err));
+        await sendEmailAlert(lead, percentage, resultStatus);
 
         res.json({
-            score: totalScore,
-            level: studentLevel,
-            grammarScore,
-            vocabularyScore,
-            mistakeScore,
-            sentenceScore,
-            readingScore,
-            listeningScore,
-            writingScore,
-            essayScore,
+            earnedPoints,
+            totalPoints,
+            percentage,
+            level: resultStatus,
             writingText,
-            essayText,
-            recommendation
+            essayText
         });
     } catch (err) {
         console.error(err);
