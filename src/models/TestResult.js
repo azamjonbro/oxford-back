@@ -11,7 +11,7 @@ const TestResultSchema = new mongoose.Schema({
     earnedPoints: { type: Number, default: 0 },
     totalPoints: { type: Number, default: 0 },
     percentage: { type: Number, default: 0 },
-    resultStatus: { type: String, enum: ['FAILED', 'ELEMENTARY', 'INTERMEDIATE', 'ADVANCED', ''], default: '' },
+    resultStatus: { type: String, default: '' },
 
     answers: [{
         questionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Question', required: true },
