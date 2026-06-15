@@ -1,6 +1,5 @@
 const { Setting } = require('../models');
 
-// Cache config for 2 minutes (120,000 ms)
 const CACHE_TTL = 120 * 1000;
 let cache = null;
 let lastFetchTime = 0;
@@ -13,9 +12,7 @@ function parseBool(value) {
 
 async function fetchConfig() {
     const now = Date.now();
-    if (cache && (now - lastFetchTime < CACHE_TTL)) {
-        return cache;
-    }
+    if (cache && (now - lastFetchTime < CACHE_TTL)) return cache;
 
     try {
         const settings = await Setting.find({
@@ -23,7 +20,9 @@ async function fetchConfig() {
                 $in: [
                     'telegram_bot_token',
                     'telegram_channel_id',
+                    'telegram_channel_enabled',
                     'telegram_admin_id',
+                    'telegram_admin_ids',
                     'telegram_enabled',
                     'telegram_leads_enabled',
                     'telegram_test_results_enabled',
@@ -35,7 +34,9 @@ async function fetchConfig() {
         const config = {
             telegram_bot_token: '',
             telegram_channel_id: '',
+            telegram_channel_enabled: false,
             telegram_admin_id: '',
+            telegram_admin_ids: '',
             telegram_enabled: false,
             telegram_leads_enabled: false,
             telegram_test_results_enabled: false,
@@ -45,16 +46,14 @@ async function fetchConfig() {
         settings.forEach(s => {
             const key = s.key;
             const val = s.value;
-            if (key === 'telegram_enabled' || key === 'telegram_leads_enabled' || key === 'telegram_test_results_enabled') {
+            if (['telegram_enabled', 'telegram_leads_enabled', 'telegram_test_results_enabled', 'telegram_channel_enabled'].includes(key)) {
                 config[key] = parseBool(val);
             } else {
                 config[key] = (val !== undefined && val !== null) ? String(val) : '';
             }
         });
 
-        if (!config.telegram_api_url) {
-            config.telegram_api_url = 'https://api.telegram.org';
-        }
+        if (!config.telegram_api_url) config.telegram_api_url = 'https://api.telegram.org';
 
         cache = config;
         lastFetchTime = now;
@@ -64,7 +63,9 @@ async function fetchConfig() {
         return cache || {
             telegram_bot_token: '',
             telegram_channel_id: '',
+            telegram_channel_enabled: false,
             telegram_admin_id: '',
+            telegram_admin_ids: '',
             telegram_enabled: false,
             telegram_leads_enabled: false,
             telegram_test_results_enabled: false,
@@ -73,55 +74,49 @@ async function fetchConfig() {
     }
 }
 
-const getTelegramConfig = async () => {
-    return await fetchConfig();
-};
+const getTelegramConfig = async () => await fetchConfig();
+const getBotToken = async () => (await fetchConfig()).telegram_bot_token;
+const getChannelId = async () => (await fetchConfig()).telegram_channel_id;
+const isChannelEnabled = async () => (await fetchConfig()).telegram_channel_enabled;
+const isTelegramEnabled = async () => (await fetchConfig()).telegram_enabled;
+const isLeadNotificationEnabled = async () => (await fetchConfig()).telegram_leads_enabled;
+const isTestResultEnabled = async () => (await fetchConfig()).telegram_test_results_enabled;
+const getApiUrl = async () => (await fetchConfig()).telegram_api_url || 'https://api.telegram.org';
+const clearCache = () => { cache = null; lastFetchTime = 0; };
 
-const getBotToken = async () => {
+// Barcha admin ID larni array qaytaradi
+const getAdminIds = async () => {
     const config = await fetchConfig();
-    return config.telegram_bot_token;
+
+    const ids = new Set();
+
+    // Eski yagona admin
+    if (config.telegram_admin_id) ids.add(config.telegram_admin_id.trim());
+
+    // Yangi bir nechta adminlar (vergul bilan ajratilgan)
+    if (config.telegram_admin_ids) {
+        config.telegram_admin_ids.split(',')
+            .map(id => id.trim())
+            .filter(id => id.length > 0)
+            .forEach(id => ids.add(id));
+    }
+
+    return [...ids];
 };
 
-const getChannelId = async () => {
-    const config = await fetchConfig();
-    return config.telegram_channel_id;
-};
-
+// Backward compat
 const getAdminId = async () => {
-    const config = await fetchConfig();
-    return config.telegram_admin_id;
-};
-
-const isTelegramEnabled = async () => {
-    const config = await fetchConfig();
-    return config.telegram_enabled;
-};
-
-const isLeadNotificationEnabled = async () => {
-    const config = await fetchConfig();
-    return config.telegram_leads_enabled;
-};
-
-const isTestResultEnabled = async () => {
-    const config = await fetchConfig();
-    return config.telegram_test_results_enabled;
-};
-
-const getApiUrl = async () => {
-    const config = await fetchConfig();
-    return config.telegram_api_url || 'https://api.telegram.org';
-};
-
-const clearCache = () => {
-    cache = null;
-    lastFetchTime = 0;
+    const ids = await getAdminIds();
+    return ids[0] || '';
 };
 
 module.exports = {
     getTelegramConfig,
     getBotToken,
     getChannelId,
+    isChannelEnabled,
     getAdminId,
+    getAdminIds,
     isTelegramEnabled,
     isLeadNotificationEnabled,
     isTestResultEnabled,

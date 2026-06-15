@@ -1,168 +1,210 @@
 const telegramConfig = require('./telegramConfig.service');
-const proxyManager = require('./proxyManager.service');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 
 function escapeHtml(unsafe) {
     if (unsafe === undefined || unsafe === null) return '';
     return String(unsafe)
-         .replace(/&/g, "&amp;")
-         .replace(/</g, "&lt;")
-         .replace(/>/g, "&gt;")
-         .replace(/"/g, "&quot;")
-         .replace(/'/g, "&#039;");
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function getStaticProxies() {
+    const proxies = [];
+    if (process.env.SOCKS5_PROXY) proxies.push(process.env.SOCKS5_PROXY);
+    let i = 2;
+    while (process.env[`SOCKS5_PROXY_${i}`]) {
+        proxies.push(process.env[`SOCKS5_PROXY_${i}`]);
+        i++;
+    }
+    return proxies;
+}
+
+let proxyIndex = 0;
+
+function rotateProxy() {
+    const proxies = getStaticProxies();
+    if (proxies.length === 0) return;
+    proxyIndex = (proxyIndex + 1) % proxies.length;
+    console.log(`[ProxyManager] 🔄 Proxy almashtirildi [${proxyIndex + 1}/${proxies.length}]: ${proxies[proxyIndex]}`);
 }
 
 async function sendTelegramRequest(botToken, chatId, messageHTML, retryCount = 0) {
-    const MAX_RETRIES = 2;
+    const MAX_RETRIES = getStaticProxies().length || 2;
 
     if (!botToken || !chatId) {
-        console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
+        console.warn(`[Telegram API Client] botToken yoki chatId yo'q`);
         return false;
     }
 
-    const proxyUrl = process.env.SOCKS5_PROXY;
+    const proxies = getStaticProxies();
+    const proxyUrl = proxies.length > 0 ? proxies[proxyIndex % proxies.length] : null;
     const proxyInfo = proxyUrl || 'none';
 
     try {
-        const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
-
+        const { default: fetch } = await import('node-fetch');
         const agent = proxyUrl ? new SocksProxyAgent(proxyUrl) : undefined;
-
         const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
-        console.log(`[Telegram API Client] Sending to Chat ID: ${chatId} via proxy: ${proxyInfo}`);
+        console.log(`[Telegram API Client] Chat ID ga yuborilmoqda: ${chatId} | Proxy: ${proxyInfo}`);
 
         const response = await fetch(url, {
             method: 'POST',
             agent,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: messageHTML,
-                parse_mode: 'HTML'
-            }),
+            body: JSON.stringify({ chat_id: chatId, text: messageHTML, parse_mode: 'HTML' }),
             timeout: 15000
         });
 
         const data = await response.json();
 
         if (response.ok && data.ok) {
-            console.log(`[Telegram API Client] ✅ Success: Message sent to Chat ID: ${chatId}`);
+            console.log(`[Telegram API Client] ✅ Muvaffaqiyatli: Chat ID ${chatId} ga yuborildi`);
             return true;
         } else {
-            console.error(`[Telegram API Client] ❌ Telegram API error:`, data);
+            console.error(`[Telegram API Client] ❌ Telegram API xatosi:`, data);
             return false;
         }
     } catch (err) {
-        console.error(`[Telegram API Client] ❌ Network error to Chat ID ${chatId}:`, err.message);
+        console.error(`[Telegram API Client] ❌ Tarmoq xatosi (Chat ID ${chatId}):`, err.message);
 
         if (retryCount < MAX_RETRIES) {
-            console.log(`[Telegram API Client] 🔄 Retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+            rotateProxy();
+            console.log(`[Telegram API Client] 🔄 Qayta urinilmoqda (${retryCount + 1}/${MAX_RETRIES})...`);
             await new Promise(r => setTimeout(r, 1000));
             return sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
         }
 
-        console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
+        console.error(`[Telegram API Client] ❌ Barcha urinishlar tugadi.`);
         return false;
     }
 }
 
-// 1. Lead Notification → Admin ID
+async function sendToAllAdmins(botToken, messageHTML) {
+    const adminIds = await telegramConfig.getAdminIds();
+    if (adminIds.length === 0) {
+        console.warn('[Telegram Service] Admin ID lar sozlanmagan.');
+        return false;
+    }
+    const results = await Promise.all(
+        adminIds.map(id => sendTelegramRequest(botToken, id, messageHTML))
+    );
+    return results.some(r => r === true);
+}
+
+// 1. Lead Notification
 exports.sendLeadNotification = async (leadData) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) {
-            console.log('[Telegram Service] Lead notification skipped: Telegram system is disabled globally.');
+            console.log('[Telegram Service] Lead bildirishnomasi o\'tkazib yuborildi: Telegram o\'chirilgan.');
             return false;
         }
         if (!(await telegramConfig.isLeadNotificationEnabled())) {
-            console.log('[Telegram Service] Lead notification skipped: Lead notifications are disabled in settings.');
+            console.log('[Telegram Service] Lead bildirishnomasi o\'tkazib yuborildi: Lead bildirisnomalar o\'chirilgan.');
             return false;
         }
 
         const botToken = await telegramConfig.getBotToken();
-        const adminId = await telegramConfig.getAdminId();
-
-        if (!botToken) { console.warn('[Telegram Service] Bot token is not configured.'); return false; }
-        if (!adminId) { console.warn('[Telegram Service] Admin ID is not configured.'); return false; }
+        if (!botToken) { console.warn('[Telegram Service] Bot token sozlanmagan.'); return false; }
 
         const { formType, fullname, phone, createdAt, extraFields } = leadData;
 
         const messageHTML = `━━━━━━━━━━━━━━━━━━
-📥 <b>NEW LEAD</b>
+📥 <b>YANGI ARIZA</b>
 
-📌 <b>Type:</b> ${escapeHtml(formType)}
+📌 <b>Turi:</b> ${escapeHtml(formType)}
+👤 <b>Ism:</b> ${escapeHtml(fullname)}
+📞 <b>Telefon:</b> ${escapeHtml(phone)}
+📅 <b>Sana:</b> ${escapeHtml(createdAt)}
 
-👤 <b>Name:</b> ${escapeHtml(fullname)}
-📞 <b>Phone:</b> ${escapeHtml(phone)}
-
-📅 <b>Date:</b> ${escapeHtml(createdAt)}
-
-ℹ️ <b>Info:</b>
+ℹ️ <b>Qo'shimcha ma'lumot:</b>
 ${escapeHtml(extraFields)}
 ━━━━━━━━━━━━━━━━━━`;
 
-        return await sendTelegramRequest(botToken, adminId, messageHTML);
+        const channelEnabled = await telegramConfig.isChannelEnabled();
+        const channelId = await telegramConfig.getChannelId();
+
+        const promises = [];
+        if (channelEnabled && channelId) {
+            promises.push(sendTelegramRequest(botToken, channelId, messageHTML));
+        }
+        promises.push(sendToAllAdmins(botToken, messageHTML));
+
+        const results = await Promise.all(promises);
+        return results.some(r => r === true);
     } catch (err) {
-        console.error('[Telegram Service] Exception in sendLeadNotification:', err);
+        console.error('[Telegram Service] sendLeadNotification xatosi:', err);
         return false;
     }
 };
 
-// 2. Test Result Notifications
+// 2. Test natijasi bildirishnomasi
 exports.sendTestResultNotifications = async (testResultData) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) {
-            console.log('[Telegram Service] Test result notification skipped: Telegram system is disabled globally.');
+            console.log('[Telegram Service] Test natijasi bildirishnomasi o\'tkazib yuborildi: Telegram o\'chirilgan.');
             return false;
         }
         if (!(await telegramConfig.isTestResultEnabled())) {
-            console.log('[Telegram Service] Test result notification skipped: Test result notifications are disabled.');
+            console.log('[Telegram Service] Test natijasi bildirishnomasi o\'tkazib yuborildi: O\'chirilgan.');
             return false;
         }
 
         const botToken = await telegramConfig.getBotToken();
-        const adminId = await telegramConfig.getAdminId();
-
-        if (!botToken) { console.warn('[Telegram Service] Bot token is not configured.'); return false; }
+        if (!botToken) { console.warn('[Telegram Service] Bot token sozlanmagan.'); return false; }
 
         const {
             fullname, phone, score, level, status, warnings,
             writingText, essayText, speakingText, ip, deviceInfo, rawResultJson
         } = testResultData;
 
-        if (adminId) {
-            const rawJsonStr = JSON.stringify(rawResultJson, null, 2);
-            const escapedJson = escapeHtml(rawJsonStr);
-            const truncatedJson = escapedJson.length > 2000 ? escapedJson.substring(0, 2000) + '\n... [TRUNCATED]' : escapedJson;
+        const rawJsonStr = JSON.stringify(rawResultJson, null, 2);
+        const escapedJson = escapeHtml(rawJsonStr);
+        const truncatedJson = escapedJson.length > 2000
+            ? escapedJson.substring(0, 2000) + '\n... [QISQARTIRILDI]'
+            : escapedJson;
 
-            const adminMsg = `━━━━━━━━━━━━━━━━━━
-👤 <b>TEST RESULT DETAILS (ADMIN)</b>
+        const adminMsg = `━━━━━━━━━━━━━━━━━━
+📊 <b>TEST NATIJASI (ADMIN)</b>
 
-👤 <b>Name:</b> ${escapeHtml(fullname)}
-📞 <b>Phone:</b> ${escapeHtml(phone)}
+👤 <b>Ism:</b> ${escapeHtml(fullname)}
+📞 <b>Telefon:</b> ${escapeHtml(phone)}
+🎯 <b>Ball:</b> ${escapeHtml(String(score))}%
+🎓 <b>Daraja:</b> ${escapeHtml(level)}
+🚦 <b>Holat:</b> ${escapeHtml(status)}
+⚠️ <b>Ogohlantirishlar:</b> ${escapeHtml(String(warnings))}
 
-📝 <b>Writing Text:</b>
-${escapeHtml(writingText) || 'None'}
+📝 <b>Yozma matn:</b>
+${escapeHtml(writingText) || 'Yo\'q'}
 
-📝 <b>Essay Text:</b>
-${escapeHtml(essayText) || 'None'}
+📝 <b>Esse matni:</b>
+${escapeHtml(essayText) || 'Yo\'q'}
 
-🗣️ <b>Speaking Text:</b>
-${escapeHtml(speakingText) || 'None'}
+🗣️ <b>Og\'zaki matn:</b>
+${escapeHtml(speakingText) || 'Yo\'q'}
 
-🌐 <b>IP Address:</b> ${escapeHtml(ip)}
-📱 <b>Device Info:</b> ${escapeHtml(deviceInfo)}
+🌐 <b>IP manzil:</b> ${escapeHtml(ip)}
+📱 <b>Qurilma:</b> ${escapeHtml(deviceInfo)}
 
-⚙️ <b>Raw Result JSON:</b>
+⚙️ <b>Natija JSON:</b>
 <pre>${truncatedJson}</pre>
 ━━━━━━━━━━━━━━━━━━`;
 
-            await sendTelegramRequest(botToken, adminId, adminMsg);
-        }
+        const channelEnabled = await telegramConfig.isChannelEnabled();
+        const channelId = await telegramConfig.getChannelId();
 
-        return true;
+        const promises = [];
+        if (channelEnabled && channelId) {
+            promises.push(sendTelegramRequest(botToken, channelId, adminMsg));
+        }
+        promises.push(sendToAllAdmins(botToken, adminMsg));
+
+        const results = await Promise.all(promises);
+        return results.some(r => r === true);
     } catch (err) {
-        console.error('[Telegram Service] Exception in sendTestResultNotifications:', err);
+        console.error('[Telegram Service] sendTestResultNotifications xatosi:', err);
         return false;
     }
 };
@@ -175,7 +217,7 @@ exports.sendChannelMessage = async (messageHTML) => {
         const channelId = await telegramConfig.getChannelId();
         return await sendTelegramRequest(botToken, channelId, messageHTML);
     } catch (err) {
-        console.error('[Telegram Service] Exception in sendChannelMessage:', err);
+        console.error('[Telegram Service] sendChannelMessage xatosi:', err);
         return false;
     }
 };
@@ -184,10 +226,9 @@ exports.sendAdminMessage = async (messageHTML) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) return false;
         const botToken = await telegramConfig.getBotToken();
-        const adminId = await telegramConfig.getAdminId();
-        return await sendTelegramRequest(botToken, adminId, messageHTML);
+        return await sendToAllAdmins(botToken, messageHTML);
     } catch (err) {
-        console.error('[Telegram Service] Exception in sendAdminMessage:', err);
+        console.error('[Telegram Service] sendAdminMessage xatosi:', err);
         return false;
     }
 };
