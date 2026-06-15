@@ -14,7 +14,8 @@ function escapeHtml(unsafe) {
 function sendTelegramRequest(botToken, chatId, messageHTML) {
     return new Promise((resolve) => {
         if (!botToken || !chatId) {
-            return resolve(false); // Settings not configured
+            console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
+            return resolve(false);
         }
 
         const postData = JSON.stringify({
@@ -36,21 +37,24 @@ function sendTelegramRequest(botToken, chatId, messageHTML) {
             }
         };
 
+        console.log(`[Telegram API Client] Sending request to Chat ID: ${chatId}...`);
+
         const req = https.request(options, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
                 if (res.statusCode >= 200 && res.statusCode < 300) {
+                    console.log(`[Telegram API Client] Success: Message sent to Chat ID: ${chatId}`);
                     resolve(true);
                 } else {
-                    console.error('Telegram API Error:', body);
+                    console.error(`[Telegram API Client] Error Response from Telegram API (Status: ${res.statusCode}):`, body);
                     resolve(false);
                 }
             });
         });
 
         req.on('error', (err) => {
-            console.error('Telegram request error:', err.message);
+            console.error(`[Telegram API Client] Network request error sending to Chat ID ${chatId}:`, err);
             resolve(false);
         });
 
@@ -62,14 +66,26 @@ function sendTelegramRequest(botToken, chatId, messageHTML) {
 // 1. Specific Lead Notification Handler
 exports.sendLeadNotification = async (leadData) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled()) || !(await telegramConfig.isLeadNotificationEnabled())) {
+        if (!(await telegramConfig.isTelegramEnabled())) {
+            console.log('[Telegram Service] Lead notification skipped: Telegram system is disabled globally.');
+            return false;
+        }
+        if (!(await telegramConfig.isLeadNotificationEnabled())) {
+            console.log('[Telegram Service] Lead notification skipped: Lead notifications are disabled in settings.');
             return false;
         }
 
         const botToken = await telegramConfig.getBotToken();
         const channelId = await telegramConfig.getChannelId();
 
-        if (!botToken || !channelId) return false;
+        if (!botToken) {
+            console.warn('[Telegram Service] Lead notification skipped: Bot token is not configured.');
+            return false;
+        }
+        if (!channelId) {
+            console.warn('[Telegram Service] Lead notification skipped: Channel ID is not configured.');
+            return false;
+        }
 
         const { formType, fullname, phone, createdAt, extraFields } = leadData;
 
@@ -95,7 +111,7 @@ ${escapedExtra}
 
         return await sendTelegramRequest(botToken, channelId, messageHTML);
     } catch (err) {
-        console.error('Failed to send Lead Notification:', err.message);
+        console.error('[Telegram Service] Exception in sendLeadNotification:', err);
         return false;
     }
 };
@@ -103,7 +119,12 @@ ${escapedExtra}
 // 2. Specific Test Result Notifications Handler
 exports.sendTestResultNotifications = async (testResultData) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled()) || !(await telegramConfig.isTestResultEnabled())) {
+        if (!(await telegramConfig.isTelegramEnabled())) {
+            console.log('[Telegram Service] Test result notification skipped: Telegram system is disabled globally.');
+            return false;
+        }
+        if (!(await telegramConfig.isTestResultEnabled())) {
+            console.log('[Telegram Service] Test result notification skipped: Test result notifications are disabled.');
             return false;
         }
 
@@ -111,7 +132,10 @@ exports.sendTestResultNotifications = async (testResultData) => {
         const channelId = await telegramConfig.getChannelId();
         const adminId = await telegramConfig.getAdminId();
 
-        if (!botToken) return false;
+        if (!botToken) {
+            console.warn('[Telegram Service] Test result notification skipped: Bot token is not configured.');
+            return false;
+        }
 
         const {
             fullname,
@@ -148,6 +172,8 @@ exports.sendTestResultNotifications = async (testResultData) => {
 ━━━━━━━━━━━━━━━━━━`;
 
             await sendTelegramRequest(botToken, channelId, channelMsg);
+        } else {
+            console.log('[Telegram Service] Skipping public channel notification: telegram_channel_id is empty.');
         }
 
         // B. Admin Message (Private)
@@ -187,11 +213,13 @@ ${escapedSpeaking || 'None'}
 ━━━━━━━━━━━━━━━━━━`;
 
             await sendTelegramRequest(botToken, adminId, adminMsg);
+        } else {
+            console.log('[Telegram Service] Skipping private admin notification: telegram_admin_id is empty.');
         }
 
         return true;
     } catch (err) {
-        console.error('Failed to send Test Result Notifications:', err.message);
+        console.error('[Telegram Service] Exception in sendTestResultNotifications:', err);
         return false;
     }
 };
@@ -199,24 +227,30 @@ ${escapedSpeaking || 'None'}
 // 3. Backward Compatibility Handlers
 exports.sendChannelMessage = async (messageHTML) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled())) return false;
+        if (!(await telegramConfig.isTelegramEnabled())) {
+            console.log('[Telegram Service] sendChannelMessage skipped: Telegram is disabled.');
+            return false;
+        }
         const botToken = await telegramConfig.getBotToken();
         const channelId = await telegramConfig.getChannelId();
         return await sendTelegramRequest(botToken, channelId, messageHTML);
     } catch (err) {
-        console.error('Failed to send to Telegram Channel:', err.message);
+        console.error('[Telegram Service] Exception in sendChannelMessage:', err);
         return false;
     }
 };
 
 exports.sendAdminMessage = async (messageHTML) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled())) return false;
+        if (!(await telegramConfig.isTelegramEnabled())) {
+            console.log('[Telegram Service] sendAdminMessage skipped: Telegram is disabled.');
+            return false;
+        }
         const botToken = await telegramConfig.getBotToken();
         const adminId = await telegramConfig.getAdminId();
         return await sendTelegramRequest(botToken, adminId, messageHTML);
     } catch (err) {
-        console.error('Failed to send to Telegram Admin:', err.message);
+        console.error('[Telegram Service] Exception in sendAdminMessage:', err);
         return false;
     }
 };
