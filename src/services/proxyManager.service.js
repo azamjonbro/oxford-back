@@ -87,15 +87,13 @@ async function findWorkingProxy() {
 }
 
 async function getAgent() {
-    if (currentAgent) return currentAgent;
-
     if (STATIC_PROXY) {
         console.log(`[ProxyManager] Using static proxy from .env: ${STATIC_PROXY}`);
-        currentAgent = new SocksProxyAgent(STATIC_PROXY);
         currentProxyUrl = STATIC_PROXY;
-        return currentAgent;
+        return new SocksProxyAgent(STATIC_PROXY);
     }
 
+    if (currentAgent) return currentAgent;
     return await rotateProxy();
 }
 
@@ -145,9 +143,8 @@ async function markCurrentFailed() {
 
     if (STATIC_PROXY) {
         console.log('[ProxyManager] Retrying static proxy from .env...');
-        currentAgent = new SocksProxyAgent(STATIC_PROXY);
         currentProxyUrl = STATIC_PROXY;
-        return currentAgent;
+        return new SocksProxyAgent(STATIC_PROXY);
     }
 
     return await rotateProxy();
