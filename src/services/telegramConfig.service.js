@@ -26,7 +26,8 @@ async function fetchConfig() {
                     'telegram_admin_id',
                     'telegram_enabled',
                     'telegram_leads_enabled',
-                    'telegram_test_results_enabled'
+                    'telegram_test_results_enabled',
+                    'telegram_api_url'
                 ]
             }
         });
@@ -37,7 +38,8 @@ async function fetchConfig() {
             telegram_admin_id: '',
             telegram_enabled: false,
             telegram_leads_enabled: false,
-            telegram_test_results_enabled: false
+            telegram_test_results_enabled: false,
+            telegram_api_url: 'https://api.telegram.org'
         };
 
         settings.forEach(s => {
@@ -50,19 +52,23 @@ async function fetchConfig() {
             }
         });
 
+        if (!config.telegram_api_url) {
+            config.telegram_api_url = 'https://api.telegram.org';
+        }
+
         cache = config;
         lastFetchTime = now;
         return cache;
     } catch (err) {
         console.error('Error fetching Telegram settings from DB:', err);
-        // Fallback to cache or empty defaults on DB error to prevent crash
         return cache || {
             telegram_bot_token: '',
             telegram_channel_id: '',
             telegram_admin_id: '',
             telegram_enabled: false,
             telegram_leads_enabled: false,
-            telegram_test_results_enabled: false
+            telegram_test_results_enabled: false,
+            telegram_api_url: 'https://api.telegram.org'
         };
     }
 }
@@ -101,6 +107,11 @@ const isTestResultEnabled = async () => {
     return config.telegram_test_results_enabled;
 };
 
+const getApiUrl = async () => {
+    const config = await fetchConfig();
+    return config.telegram_api_url || 'https://api.telegram.org';
+};
+
 const clearCache = () => {
     cache = null;
     lastFetchTime = 0;
@@ -114,5 +125,6 @@ module.exports = {
     isTelegramEnabled,
     isLeadNotificationEnabled,
     isTestResultEnabled,
+    getApiUrl,
     clearCache
 };

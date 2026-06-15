@@ -11,7 +11,9 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
-function sendTelegramRequest(botToken, chatId, messageHTML) {
+async function sendTelegramRequest(botToken, chatId, messageHTML) {
+    const baseUrl = await telegramConfig.getApiUrl(); // Dynamic Base URL (e.g. proxy or https://api.telegram.org)
+    
     return new Promise((resolve) => {
         if (!botToken || !chatId) {
             console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
@@ -24,12 +26,13 @@ function sendTelegramRequest(botToken, chatId, messageHTML) {
             parse_mode: 'HTML'
         });
 
-        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+        const url = `${baseUrl.replace(/\/$/, '')}/bot${botToken}/sendMessage`;
         const parsedUrl = new URL(url);
 
         const options = {
             hostname: parsedUrl.hostname,
-            path: parsedUrl.pathname,
+            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -37,9 +40,11 @@ function sendTelegramRequest(botToken, chatId, messageHTML) {
             }
         };
 
-        console.log(`[Telegram API Client] Sending request to Chat ID: ${chatId}...`);
+        console.log(`[Telegram API Client] Sending request to: ${parsedUrl.origin} | Chat ID: ${chatId}...`);
 
-        const req = https.request(options, (res) => {
+        const httpModule = parsedUrl.protocol === 'https:' ? require('https') : require('http');
+
+        const req = httpModule.request(options, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
@@ -54,7 +59,7 @@ function sendTelegramRequest(botToken, chatId, messageHTML) {
         });
 
         req.on('error', (err) => {
-            console.error(`[Telegram API Client] Network request error sending to Chat ID ${chatId}:`, err);
+            console.error(`[Telegram API Client] Network request error sending to Chat ID ${chatId} via ${parsedUrl.origin}:`, err);
             resolve(false);
         });
 
