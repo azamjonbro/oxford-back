@@ -302,6 +302,18 @@ exports.submitTest = async (req, res) => {
             questionMap[q._id.toString()] = q;
         });
 
+        // Section scorlari
+        const sectionStats = {
+            grammar:    { earned: 0, total: 0, correct: 0, wrong: 0 },
+            vocabulary: { earned: 0, total: 0, correct: 0, wrong: 0 },
+            mistake:    { earned: 0, total: 0, correct: 0, wrong: 0 },
+            sentence:   { earned: 0, total: 0, correct: 0, wrong: 0 },
+            reading:    { earned: 0, total: 0, correct: 0, wrong: 0 },
+            listening:  { earned: 0, total: 0, correct: 0, wrong: 0 },
+            writing:    { earned: 0, total: 0, correct: 0, wrong: 0 },
+            essay:      { earned: 0, total: 0, correct: 0, wrong: 0 },
+        };
+
         let earnedPoints = 0;
         let totalPoints = 0;
         let writingText = '';
@@ -310,16 +322,33 @@ exports.submitTest = async (req, res) => {
         const gradedAnswers = testResult.answers.map(ans => {
             const dbQuestion = questionMap[ans.questionId.toString()];
             let isCorrect = false;
-            let qPoints = dbQuestion && dbQuestion.points ? dbQuestion.points : 1;
+            let qPoints = dbQuestion?.points || 1;
+            const section = dbQuestion?.section || 'grammar';
 
             if (dbQuestion) {
                 totalPoints += qPoints;
-                if (dbQuestion.section === 'writing') {
+                if (sectionStats[section]) sectionStats[section].total += qPoints;
+
+                if (section === 'writing') {
                     writingText = ans.selectedAnswers[0] || '';
-                    if (writingText.length > 50) { isCorrect = true; earnedPoints += qPoints; }
-                } else if (dbQuestion.section === 'essay') {
+                    const wc = writingText.trim().split(/\s+/).filter(w => w.length > 0).length;
+                    const wScore = wc === 0 ? 0 : wc < 30 ? 2 : wc < 50 ? 6 : wc <= 70 ? 10 : wc <= 90 ? 8 : 5;
+                    if (wScore >= 6) isCorrect = true;
+                    earnedPoints += wScore;
+                    sectionStats.writing.earned += wScore;
+                    if (isCorrect) sectionStats.writing.correct++;
+                    else sectionStats.writing.wrong++;
+
+                } else if (section === 'essay') {
                     essayText = ans.selectedAnswers[0] || '';
-                    if (essayText.length > 100) { isCorrect = true; earnedPoints += qPoints; }
+                    const wc = essayText.trim().split(/\s+/).filter(w => w.length > 0).length;
+                    const eScore = wc === 0 ? 0 : wc < 100 ? 2 : wc < 150 ? 6 : wc <= 250 ? 10 : wc <= 300 ? 8 : 5;
+                    if (eScore >= 6) isCorrect = true;
+                    earnedPoints += eScore;
+                    sectionStats.essay.earned += eScore;
+                    if (isCorrect) sectionStats.essay.correct++;
+                    else sectionStats.essay.wrong++;
+
                 } else {
                     const correctAnswers = dbQuestion.correctAnswers.map(c => c.trim().toLowerCase());
                     const studentAnswers = ans.selectedAnswers.map(s => s.trim().toLowerCase());
@@ -335,100 +364,149 @@ exports.submitTest = async (req, res) => {
                         }
                     }
 
-                    if (isCorrect) earnedPoints += qPoints;
+                    if (isCorrect) {
+                        earnedPoints += qPoints;
+                        if (sectionStats[section]) {
+                            sectionStats[section].earned += qPoints;
+                            sectionStats[section].correct++;
+                        }
+                    } else {
+                        if (sectionStats[section]) sectionStats[section].wrong++;
+                    }
                 }
             }
 
             return { questionId: ans.questionId, selectedAnswers: ans.selectedAnswers, isCorrect };
         });
 
-        const percentage = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
-        
-        let resultStatus = 'FAILED';
-        if (percentage >= 50 && percentage < 70) resultStatus = 'ELEMENTARY';
-        else if (percentage >= 70 && percentage < 90) resultStatus = 'INTERMEDIATE';
-        else if (percentage >= 90) resultStatus = 'ADVANCED';
+        // Har bir section max ballini hisoblash
+        const sectionMaxPoints = { grammar: 20, vocabulary: 20, mistake: 10, sentence: 10, reading: 10, listening: 10, writing: 10, essay: 10 };
 
-        const finalLevel = adminLevel || resultStatus;
+        const grammarScore    = Math.min(sectionStats.grammar.earned, sectionMaxPoints.grammar);
+        const vocabularyScore = Math.min(sectionStats.vocabulary.earned, sectionMaxPoints.vocabulary);
+        const mistakeScore    = Math.min(sectionStats.mistake.earned, sectionMaxPoints.mistake);
+        const sentenceScore   = Math.min(sectionStats.sentence.earned, sectionMaxPoints.sentence);
+        const readingScore    = Math.min(sectionStats.reading.earned, sectionMaxPoints.reading);
+        const listeningScore  = Math.min(sectionStats.listening.earned, sectionMaxPoints.listening);
+        const writingScore    = Math.min(sectionStats.writing.earned, sectionMaxPoints.writing);
+        const essayScore      = Math.min(sectionStats.essay.earned, sectionMaxPoints.essay);
 
+        const score = grammarScore + vocabularyScore + mistakeScore + sentenceScore + readingScore + listeningScore + writingScore + essayScore;
+        const percentage = Math.min(Math.round((score / 100) * 100), 100);
+
+        // Daraja aniqlash
+        const defaultRanges = [
+            { name: 'Beginner',           min: 0,  max: 20,  recommendation: 'Asoslardan boshlashni tavsiya etamiz.' },
+            { name: 'Elementary',         min: 21, max: 40,  recommendation: 'Boshlang\'ich muloqot ko\'nikmalaringiz bor. Grammatika va gapirish ko\'nikmalaringizni oshiramiz!' },
+            { name: 'Pre-Intermediate',   min: 41, max: 60,  recommendation: 'Yaxshi natija! Tanish mavzularni tushunasiz. Keling, o\'rta daraja savodxonligini maqsad qilaylik.' },
+            { name: 'Intermediate',       min: 61, max: 75,  recommendation: 'Ajoyib! Turli vaziyatlarda o\'zingizni ifoda eta olasiz. Keling, ilg\'or ko\'nikmalarni rivojlantiraylik.' },
+            { name: 'Upper-Intermediate', min: 76, max: 88,  recommendation: 'Impressive! Siz yuqori savodxonlikka juda yaqinsiz. IELTS yoki biznes ingliz tiliga tayyorlanamiz.' },
+            { name: 'IELTS Foundation',   min: 89, max: 100, recommendation: 'Ajoyib natija! Siz ilg\'or ingliz tili ko\'nikmalariga egasiz. Intensiv IELTS tayyorgarligiga to\'liq tayyorsiz!' }
+        ];
+
+        let levelRanges = defaultRanges;
+        try {
+            const levelsSetting = await Setting.findOne({ key: 'placement_test_levels' });
+            if (levelsSetting?.value) levelRanges = JSON.parse(levelsSetting.value);
+        } catch (e) {}
+
+        let resultLevel = 'Beginner';
+        let recommendation = defaultRanges[0].recommendation;
+        for (const range of levelRanges) {
+            if (score >= range.min && score <= range.max) {
+                resultLevel = range.name;
+                recommendation = range.recommendation || '';
+                break;
+            }
+        }
+
+        const finalLevel = adminLevel || resultLevel;
+
+        // TestResult ni saqlash
         testResult.answers = gradedAnswers;
         testResult.earnedPoints = earnedPoints;
         testResult.totalPoints = totalPoints;
+        testResult.score = score;
         testResult.percentage = percentage;
-        testResult.resultStatus = resultStatus;
+        testResult.resultStatus = finalLevel;
         testResult.level = finalLevel;
-        testResult.adminLevel = adminLevel || '';
+        testResult.grammarScore    = grammarScore;
+        testResult.vocabularyScore = vocabularyScore;
+        testResult.mistakeScore    = mistakeScore;
+        testResult.sentenceScore   = sentenceScore;
+        testResult.readingScore    = readingScore;
+        testResult.listeningScore  = listeningScore;
+        testResult.writingScore    = writingScore;
+        testResult.essayScore      = essayScore;
         testResult.completionStatus = 'completed';
         testResult.completedAt = new Date();
-
         testResult.writingText = writingText;
         testResult.essayText = essayText;
-
         if (typeof timeSpent === 'number') testResult.timeSpent = timeSpent;
         if (typeof warnings === 'number') testResult.warnings = warnings;
         await testResult.save();
 
         const lead = await Lead.findById(testResult.lead).populate('branch');
 
-        // Extract speaking answer text if present
-        let speakingText = 'N/A';
-        const speakingAnswer = testResult.answers.find(ans => {
-            const q = questionMap[ans.questionId.toString()];
-            return q && q.section && q.section.toLowerCase().includes('speaking');
-        });
-        if (speakingAnswer && speakingAnswer.selectedAnswers && speakingAnswer.selectedAnswers.length > 0) {
-            speakingText = speakingAnswer.selectedAnswers[0];
-        }
+        // Section breakdown (Telegram uchun)
+        const sectionBreakdown = `
+Grammar: ${grammarScore}/20 (✅${sectionStats.grammar.correct} ❌${sectionStats.grammar.wrong})
+Vocabulary: ${vocabularyScore}/20 (✅${sectionStats.vocabulary.correct} ❌${sectionStats.vocabulary.wrong})
+Mistake: ${mistakeScore}/10 (✅${sectionStats.mistake.correct} ❌${sectionStats.mistake.wrong})
+Sentence: ${sentenceScore}/10 (✅${sectionStats.sentence.correct} ❌${sectionStats.sentence.wrong})
+Reading: ${readingScore}/10 (✅${sectionStats.reading.correct} ❌${sectionStats.reading.wrong})
+Listening: ${listeningScore}/10 (✅${sectionStats.listening.correct} ❌${sectionStats.listening.wrong})
+Writing: ${writingScore}/10
+Essay: ${essayScore}/10`.trim();
 
-        const status = percentage >= 50 ? 'SUCCESS' : 'FAILED';
-
-        const rawResultJson = {
-            _id: testResult._id,
-            lead: testResult.lead,
-            score: testResult.score,
-            level: testResult.level,
-            testLevel: testResult.testLevel,
-            earnedPoints: testResult.earnedPoints,
-            totalPoints: testResult.totalPoints,
-            percentage: testResult.percentage,
-            resultStatus: testResult.resultStatus,
-            completionStatus: testResult.completionStatus,
-            startedAt: testResult.startedAt,
-            completedAt: testResult.completedAt,
-            timeSpent: testResult.timeSpent,
-            warnings: testResult.warnings,
-            writingText: testResult.writingText,
-            essayText: testResult.essayText,
-            answers: testResult.answers.map(ans => ({
-                questionId: ans.questionId,
-                selectedAnswers: ans.selectedAnswers,
-                isCorrect: ans.isCorrect
-            }))
-        };
-
-        // Send Test Result Notifications (handles channel and private admin messages dynamically)
         telegramService.sendTestResultNotifications({
             fullname: lead.name,
             phone: lead.phone,
-            score: percentage,
-            level: resultStatus,
-            status: status,
+            score: score,
+            level: finalLevel,
+            status: score >= 50 ? 'MUVAFFAQIYATLI' : 'MUVAFFAQIYATSIZ',
             warnings: testResult.warnings || 0,
-            writingText: writingText,
-            essayText: essayText,
-            speakingText: speakingText,
-            ip: req.ip || req.headers['x-forwarded-for'] || 'Unknown',
-            deviceInfo: req.headers['user-agent'] || 'Unknown',
-            rawResultJson: rawResultJson
-        }).catch(err => console.error("Telegram test result notify error:", err));
+            writingText,
+            essayText,
+            speakingText: 'N/A',
+            ip: req.ip || req.headers['x-forwarded-for'] || 'Noma\'lum',
+            deviceInfo: req.headers['user-agent'] || 'Noma\'lum',
+            sectionBreakdown,
+            rawResultJson: {
+                score, percentage, level: finalLevel,
+                grammarScore, vocabularyScore, mistakeScore,
+                sentenceScore, readingScore, listeningScore,
+                writingScore, essayScore,
+                earnedPoints, totalPoints,
+                completedAt: testResult.completedAt
+            }
+        }).catch(err => console.error('Telegram xatosi:', err));
 
-        await sendEmailAlert(lead, percentage, resultStatus);
+        await sendEmailAlert(lead, score, finalLevel);
 
         res.json({
-            earnedPoints,
-            totalPoints,
+            score,
             percentage,
-            level: resultStatus,
+            level: finalLevel,
+            recommendation,
+            grammarScore,
+            vocabularyScore,
+            mistakeScore,
+            sentenceScore,
+            readingScore,
+            listeningScore,
+            writingScore,
+            essayScore,
+            sectionStats: {
+                grammar:    sectionStats.grammar,
+                vocabulary: sectionStats.vocabulary,
+                mistake:    sectionStats.mistake,
+                sentence:   sectionStats.sentence,
+                reading:    sectionStats.reading,
+                listening:  sectionStats.listening,
+                writing:    sectionStats.writing,
+                essay:      sectionStats.essay,
+            },
             writingText,
             essayText
         });
