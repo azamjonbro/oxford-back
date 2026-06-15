@@ -1,14 +1,25 @@
 const https = require('https');
 const { SocksProxyAgent } = require('socks-proxy-agent');
 
-const STATIC_PROXY = process.env.SOCKS5_PROXY;
+// .env dan barcha proxy larni olish
+function getStaticProxies() {
+    const proxies = [];
+    if (process.env.SOCKS5_PROXY) proxies.push(process.env.SOCKS5_PROXY);
+    let i = 2;
+    while (process.env[`SOCKS5_PROXY_${i}`]) {
+        proxies.push(process.env[`SOCKS5_PROXY_${i}`]);
+        i++;
+    }
+    return proxies;
+}
+
 const PROXY_LIST_URL = 'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt';
 const TEST_URL = 'https://api.telegram.org/';
 const TEST_TIMEOUT = 8000;
 const PROXY_REFRESH_INTERVAL = 30 * 60 * 1000;
 
-let currentAgent = null;
 let currentProxyUrl = null;
+let currentProxyIndex = 0;
 let proxyList = [];
 let lastFetchTime = 0;
 let isRotating = false;
@@ -44,7 +55,7 @@ function testProxy(proxyUrl) {
         }, (res) => {
             if (res.statusCode > 0) {
                 res.destroy();
-                resolve({ success: true, agent, proxyUrl });
+                resolve({ success: true, proxyUrl });
             } else {
                 resolve({ success: false });
             }
@@ -78,7 +89,7 @@ async function findWorkingProxy() {
         const working = results.find(r => r.success);
         if (working) {
             console.log(`[ProxyManager] ✅ Found working proxy: ${working.proxyUrl}`);
-            return working;
+            return working.proxyUrl;
         }
     }
 
@@ -87,67 +98,59 @@ async function findWorkingProxy() {
 }
 
 async function getAgent() {
-    if (STATIC_PROXY) {
-        console.log(`[ProxyManager] Using static proxy from .env: ${STATIC_PROXY}`);
-        currentProxyUrl = STATIC_PROXY;
-        return new SocksProxyAgent(STATIC_PROXY);
+    const staticProxies = getStaticProxies();
+
+    if (staticProxies.length > 0) {
+        const proxy = staticProxies[currentProxyIndex % staticProxies.length];
+        currentProxyUrl = proxy;
+        console.log(`[ProxyManager] Using static proxy [${currentProxyIndex % staticProxies.length + 1}/${staticProxies.length}]: ${proxy}`);
+        return new SocksProxyAgent(proxy);
     }
 
-    if (currentAgent) return currentAgent;
-    return await rotateProxy();
-}
-
-async function rotateProxy() {
-    if (isRotating) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return currentAgent;
+    // Static proxy yo'q — bepul listdan topamiz
+    if (!currentProxyUrl) {
+        currentProxyUrl = await findWorkingProxy();
     }
 
-    isRotating = true;
-    try {
-        console.log('[ProxyManager] Rotating to a new proxy...');
-
-        if (currentProxyUrl) {
-            proxyList = proxyList.filter(p => !currentProxyUrl.includes(p));
-        }
-        currentAgent = null;
-        currentProxyUrl = null;
-
-        const result = await findWorkingProxy();
-        if (result) {
-            currentAgent = result.agent;
-            currentProxyUrl = result.proxyUrl;
-            return currentAgent;
-        }
-
-        proxyList = [];
-        lastFetchTime = 0;
-        const retryResult = await findWorkingProxy();
-        if (retryResult) {
-            currentAgent = retryResult.agent;
-            currentProxyUrl = retryResult.proxyUrl;
-            return currentAgent;
-        }
-
-        console.error('[ProxyManager] ❌ Failed to find any working proxy after full retry.');
-        return null;
-    } finally {
-        isRotating = false;
+    if (currentProxyUrl) {
+        return new SocksProxyAgent(currentProxyUrl);
     }
+
+    return null;
 }
 
 async function markCurrentFailed() {
     console.warn(`[ProxyManager] ⚠️ Current proxy failed: ${currentProxyUrl}. Will rotate.`);
-    currentAgent = null;
-    currentProxyUrl = null;
 
-    if (STATIC_PROXY) {
-        console.log('[ProxyManager] Retrying static proxy from .env...');
-        currentProxyUrl = STATIC_PROXY;
-        return new SocksProxyAgent(STATIC_PROXY);
+    const staticProxies = getStaticProxies();
+
+    if (staticProxies.length > 0) {
+        currentProxyIndex++;
+        const nextProxy = staticProxies[currentProxyIndex % staticProxies.length];
+        currentProxyUrl = nextProxy;
+        console.log(`[ProxyManager] 🔄 Switching to next static proxy [${currentProxyIndex % staticProxies.length + 1}/${staticProxies.length}]: ${nextProxy}`);
+        return new SocksProxyAgent(nextProxy);
     }
 
-    return await rotateProxy();
+    // Static proxy yo'q — bepul listdan yangi topamiz
+    currentProxyUrl = null;
+    if (isRotating) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return currentProxyUrl ? new SocksProxyAgent(currentProxyUrl) : null;
+    }
+
+    isRotating = true;
+    try {
+        currentProxyUrl = await findWorkingProxy();
+        if (!currentProxyUrl) {
+            proxyList = [];
+            lastFetchTime = 0;
+            currentProxyUrl = await findWorkingProxy();
+        }
+        return currentProxyUrl ? new SocksProxyAgent(currentProxyUrl) : null;
+    } finally {
+        isRotating = false;
+    }
 }
 
 function getCurrentProxyUrl() {
@@ -156,7 +159,6 @@ function getCurrentProxyUrl() {
 
 module.exports = {
     getAgent,
-    rotateProxy,
     markCurrentFailed,
     getCurrentProxyUrl
 };
