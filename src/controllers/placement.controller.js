@@ -515,3 +515,55 @@ Essay: ${essayScore}/10`.trim();
         res.status(500).json({ message: err.message });
     }
 };
+// Noto'g'ri javoblar ro'yxatini to'plash
+const wrongAnswers = gradedAnswers
+    .filter(a => !a.isCorrect)
+    .map(a => {
+        const dbQ = questionMap[a.questionId.toString()];
+        return {
+            section: dbQ?.section || '',
+            category: dbQ?.category || '',
+            questionText: dbQ?.text || '',
+            correctAnswers: dbQ?.correctAnswers || [],
+            studentAnswers: a.selectedAnswers
+        };
+    })
+    .filter(a => a.section !== 'writing' && a.section !== 'essay'); // writing/essay auto-grade emas
+
+// Har section uchun to'g'ri/noto'g'ri soni
+const sectionSummary = {};
+for (const [sec, stat] of Object.entries(sectionStats)) {
+    const total = stat.correct + stat.wrong;
+    if (total > 0) {
+        sectionSummary[sec] = {
+            correct: stat.correct,
+            wrong: stat.wrong,
+            total: total
+        };
+    }
+}
+
+const totalCorrect = gradedAnswers.filter(a => a.isCorrect).length;
+const totalAnswered = gradedAnswers.length;
+
+res.json({
+    score,
+    percentage,
+    level: finalLevel,
+    recommendation,
+    grammarScore,
+    vocabularyScore,
+    mistakeScore,
+    sentenceScore,
+    readingScore,
+    listeningScore,
+    writingScore,
+    essayScore,
+    // Yangi fieldlar:
+    totalCorrect,
+    totalAnswered,
+    sectionSummary,
+    wrongAnswers,
+    writingText,
+    essayText
+});
