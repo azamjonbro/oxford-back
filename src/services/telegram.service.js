@@ -1,7 +1,6 @@
 const telegramConfig = require('./telegramConfig.service');
 const proxyManager = require('./proxyManager.service');
-const https = require('https');
-const http = require('http');
+const { SocksProxyAgent } = require('socks-proxy-agent');
 
 function escapeHtml(unsafe) {
     if (unsafe === undefined || unsafe === null) return '';
@@ -13,104 +12,59 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
-/**
- * Send a Telegram API request via SOCKS5 proxy with auto-retry/rotation
- */
 async function sendTelegramRequest(botToken, chatId, messageHTML, retryCount = 0) {
     const MAX_RETRIES = 2;
-    const baseUrl = await telegramConfig.getApiUrl();
 
-    return new Promise(async (resolve) => {
-        if (!botToken || !chatId) {
-            console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
-            return resolve(false);
-        }
+    if (!botToken || !chatId) {
+        console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
+        return false;
+    }
 
-        const postData = JSON.stringify({
-            chat_id: chatId,
-            text: messageHTML,
-            parse_mode: 'HTML'
-        });
+    const proxyUrl = process.env.SOCKS5_PROXY;
+    const proxyInfo = proxyUrl || 'none';
 
-        const url = `${baseUrl.replace(/\/$/, '')}/bot${botToken}/sendMessage`;
-        const parsedUrl = new URL(url);
+    try {
+        const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
 
-        let agent = null;
-        try {
-            agent = await proxyManager.getAgent();
-        } catch (err) {
-            console.error('[Telegram API Client] Failed to get proxy agent:', err.message);
-        }
+        const agent = proxyUrl ? new SocksProxyAgent(proxyUrl) : undefined;
 
-        const options = {
-            hostname: parsedUrl.hostname,
-            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: 'POST',
-            family: 4,
-            headers: {
-                'Content-Type': 'application/json',
-                'Content-Length': Buffer.byteLength(postData)
-            },
-            timeout: 15000
-        };
+        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
-        // Attach SOCKS5 proxy agent if available
-        if (agent) {
-            options.agent = agent;
-        }
-
-        const proxyInfo = proxyManager.getCurrentProxyUrl();
         console.log(`[Telegram API Client] Sending to Chat ID: ${chatId} via proxy: ${proxyInfo}`);
 
-        const httpModule = parsedUrl.protocol === 'https:' ? https : http;
-
-        const req = httpModule.request(options, (res) => {
-            let body = '';
-            res.on('data', chunk => body += chunk);
-            res.on('end', () => {
-                if (res.statusCode >= 200 && res.statusCode < 300) {
-                    console.log(`[Telegram API Client] ✅ Success: Message sent to Chat ID: ${chatId} via ${proxyInfo}`);
-                    resolve(true);
-                } else {
-                    console.error(`[Telegram API Client] ❌ Telegram API error (Status: ${res.statusCode}):`, body);
-                    resolve(false);
-                }
-            });
+        const response = await fetch(url, {
+            method: 'POST',
+            agent,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: messageHTML,
+                parse_mode: 'HTML'
+            }),
+            timeout: 15000
         });
 
-        req.on('timeout', async () => {
-            req.destroy();
-            console.error(`[Telegram API Client] ⏱️ Request timeout for Chat ID: ${chatId} via ${proxyInfo}`);
+        const data = await response.json();
 
-            if (retryCount < MAX_RETRIES) {
-                console.log(`[Telegram API Client] 🔄 Rotating proxy and retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
-                await proxyManager.markCurrentFailed();
-                const result = await sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
-                resolve(result);
-            } else {
-                console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
-                resolve(false);
-            }
-        });
+        if (response.ok && data.ok) {
+            console.log(`[Telegram API Client] ✅ Success: Message sent to Chat ID: ${chatId}`);
+            return true;
+        } else {
+            console.error(`[Telegram API Client] ❌ Telegram API error:`, data);
+            return false;
+        }
+    } catch (err) {
+        console.error(`[Telegram API Client] ❌ Network error to Chat ID ${chatId}:`, err.message);
 
-        req.on('error', async (err) => {
-            console.error(`[Telegram API Client] ❌ Network error to Chat ID ${chatId} via ${proxyInfo}:`, err.message);
+        if (retryCount < MAX_RETRIES) {
+            console.log(`[Telegram API Client] 🔄 Retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+            await new Promise(r => setTimeout(r, 1000));
+            return sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
+        }
 
-            if (retryCount < MAX_RETRIES) {
-                console.log(`[Telegram API Client] 🔄 Rotating proxy and retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
-                await proxyManager.markCurrentFailed();
-                const result = await sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
-                resolve(result);
-            } else {
-                console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
-                resolve(false);
-            }
-        });
-
-        req.write(postData);
-        req.end();
-    });
+        console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
+        return false;
+    }
 }
 
 // 1. Lead Notification → Admin ID
@@ -128,14 +82,8 @@ exports.sendLeadNotification = async (leadData) => {
         const botToken = await telegramConfig.getBotToken();
         const adminId = await telegramConfig.getAdminId();
 
-        if (!botToken) {
-            console.warn('[Telegram Service] Lead notification skipped: Bot token is not configured.');
-            return false;
-        }
-        if (!adminId) {
-            console.warn('[Telegram Service] Lead notification skipped: Admin ID is not configured.');
-            return false;
-        }
+        if (!botToken) { console.warn('[Telegram Service] Bot token is not configured.'); return false; }
+        if (!adminId) { console.warn('[Telegram Service] Admin ID is not configured.'); return false; }
 
         const { formType, fullname, phone, createdAt, extraFields } = leadData;
 
@@ -160,7 +108,7 @@ ${escapeHtml(extraFields)}
     }
 };
 
-// 2. Test Result Notifications → Admin ID only (channel commented out)
+// 2. Test Result Notifications
 exports.sendTestResultNotifications = async (testResultData) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) {
@@ -175,35 +123,13 @@ exports.sendTestResultNotifications = async (testResultData) => {
         const botToken = await telegramConfig.getBotToken();
         const adminId = await telegramConfig.getAdminId();
 
-        if (!botToken) {
-            console.warn('[Telegram Service] Test result notification skipped: Bot token is not configured.');
-            return false;
-        }
+        if (!botToken) { console.warn('[Telegram Service] Bot token is not configured.'); return false; }
 
         const {
             fullname, phone, score, level, status, warnings,
             writingText, essayText, speakingText, ip, deviceInfo, rawResultJson
         } = testResultData;
 
-        // A. Channel Message (Public) - COMMENTED OUT AS REQUESTED
-        /*
-        const channelId = await telegramConfig.getChannelId();
-        if (channelId) {
-            const channelMsg = `━━━━━━━━━━━━━━━━━━
-🔔 <b>TEST RESULT COMPLETION</b>
-
-👤 <b>Name:</b> ${escapeHtml(fullname)}
-📞 <b>Phone:</b> ${escapeHtml(phone)}
-📊 <b>Score:</b> ${score}%
-🎓 <b>Level:</b> ${escapeHtml(level)}
-🚦 <b>Status:</b> ${escapeHtml(status)}
-⚠️ <b>Warnings:</b> ${escapeHtml(String(warnings))}
-━━━━━━━━━━━━━━━━━━`;
-            await sendTelegramRequest(botToken, channelId, channelMsg);
-        }
-        */
-
-        // B. Admin Message (Private)
         if (adminId) {
             const rawJsonStr = JSON.stringify(rawResultJson, null, 2);
             const escapedJson = escapeHtml(rawJsonStr);
@@ -232,8 +158,6 @@ ${escapeHtml(speakingText) || 'None'}
 ━━━━━━━━━━━━━━━━━━`;
 
             await sendTelegramRequest(botToken, adminId, adminMsg);
-        } else {
-            console.log('[Telegram Service] Skipping admin notification: telegram_admin_id is empty.');
         }
 
         return true;
@@ -243,13 +167,10 @@ ${escapeHtml(speakingText) || 'None'}
     }
 };
 
-// 3. Backward Compatibility Handlers
+// 3. Backward Compatibility
 exports.sendChannelMessage = async (messageHTML) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled())) {
-            console.log('[Telegram Service] sendChannelMessage skipped: Telegram is disabled.');
-            return false;
-        }
+        if (!(await telegramConfig.isTelegramEnabled())) return false;
         const botToken = await telegramConfig.getBotToken();
         const channelId = await telegramConfig.getChannelId();
         return await sendTelegramRequest(botToken, channelId, messageHTML);
@@ -261,10 +182,7 @@ exports.sendChannelMessage = async (messageHTML) => {
 
 exports.sendAdminMessage = async (messageHTML) => {
     try {
-        if (!(await telegramConfig.isTelegramEnabled())) {
-            console.log('[Telegram Service] sendAdminMessage skipped: Telegram is disabled.');
-            return false;
-        }
+        if (!(await telegramConfig.isTelegramEnabled())) return false;
         const botToken = await telegramConfig.getBotToken();
         const adminId = await telegramConfig.getAdminId();
         return await sendTelegramRequest(botToken, adminId, messageHTML);
