@@ -34,6 +34,7 @@ async function sendTelegramRequest(botToken, chatId, messageHTML) {
             port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
             path: parsedUrl.pathname + parsedUrl.search,
             method: 'POST',
+            family: 4, // Force IPv4 to bypass broken/unrouted IPv6 on hosting provider
             headers: {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
@@ -81,14 +82,14 @@ exports.sendLeadNotification = async (leadData) => {
         }
 
         const botToken = await telegramConfig.getBotToken();
-        const channelId = await telegramConfig.getChannelId();
+        const adminId = await telegramConfig.getAdminId();
 
         if (!botToken) {
             console.warn('[Telegram Service] Lead notification skipped: Bot token is not configured.');
             return false;
         }
-        if (!channelId) {
-            console.warn('[Telegram Service] Lead notification skipped: Channel ID is not configured.');
+        if (!adminId) {
+            console.warn('[Telegram Service] Lead notification skipped: Admin ID is not configured.');
             return false;
         }
 
@@ -114,7 +115,8 @@ exports.sendLeadNotification = async (leadData) => {
 ${escapedExtra}
 ━━━━━━━━━━━━━━━━━━`;
 
-        return await sendTelegramRequest(botToken, channelId, messageHTML);
+        // Sent to Admin ID directly instead of Channel
+        return await sendTelegramRequest(botToken, adminId, messageHTML);
     } catch (err) {
         console.error('[Telegram Service] Exception in sendLeadNotification:', err);
         return false;
@@ -134,7 +136,6 @@ exports.sendTestResultNotifications = async (testResultData) => {
         }
 
         const botToken = await telegramConfig.getBotToken();
-        const channelId = await telegramConfig.getChannelId();
         const adminId = await telegramConfig.getAdminId();
 
         if (!botToken) {
@@ -157,7 +158,9 @@ exports.sendTestResultNotifications = async (testResultData) => {
             rawResultJson
         } = testResultData;
 
-        // A. Channel Message (Public)
+        // A. Channel Message (Public) - COMMENTED OUT AS REQUESTED
+        /*
+        const channelId = await telegramConfig.getChannelId();
         if (channelId) {
             const escapedName = escapeHtml(fullname);
             const escapedPhone = escapeHtml(phone);
@@ -180,6 +183,7 @@ exports.sendTestResultNotifications = async (testResultData) => {
         } else {
             console.log('[Telegram Service] Skipping public channel notification: telegram_channel_id is empty.');
         }
+        */
 
         // B. Admin Message (Private)
         if (adminId) {
