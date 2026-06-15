@@ -14,7 +14,7 @@ exports.submitContactForm = async (req, res) => {
         });
         await newMessage.save();
 
-        // 2. Format Telegram message
+        // 2. Format and send Lead notification
         let additionalInfoStr = '';
         if (course) additionalInfoStr += `Course: ${course}\n`;
         if (time) additionalInfoStr += `Preferred Time: ${time}\n`;
@@ -22,30 +22,15 @@ exports.submitContactForm = async (req, res) => {
             if (v) additionalInfoStr += `${k}: ${v}\n`;
         }
 
-        const telegramHtml = `━━━━━━━━━━━━━━━━━━
-📥 <b>NEW LEAD</b>
-
-📌 <b>Form Type:</b>
-${formType || 'Contact/Registration Form'}
-
-👤 <b>Full Name:</b>
-${name || 'N/A'}
-
-📞 <b>Phone:</b>
-${phone || 'N/A'}
-
-📅 <b>Date:</b>
-${new Date().toLocaleString('en-GB')}
-
-ℹ️ <b>Additional Info:</b>
-${message ? `Message: ${message}\n` : ''}${additionalInfoStr || 'None'}
-
-🌐 <b>Source:</b>
-Website
-━━━━━━━━━━━━━━━━━━`;
-
-        // 3. Send to Telegram Channel (async, we don't await blocking if it fails)
-        telegramService.sendChannelMessage(telegramHtml).catch(err => console.error("Telegram send error:", err));
+        const extraFields = `${message ? `Message: ${message}\n` : ''}${additionalInfoStr || 'None'}`;
+        
+        telegramService.sendLeadNotification({
+            formType: formType || 'Contact Form',
+            fullname: name || 'N/A',
+            phone: phone || 'N/A',
+            createdAt: new Date().toLocaleString('en-GB'),
+            extraFields: extraFields.trim()
+        }).catch(err => console.error("Telegram lead notify error:", err));
 
         res.status(201).json({ message: 'Form submitted successfully', data: newMessage });
     } catch (err) {

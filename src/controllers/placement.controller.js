@@ -144,6 +144,17 @@ exports.registerTest = async (req, res) => {
         lead.testResult = testResult._id;
         await lead.save();
 
+        // Send Lead notification to Telegram channel
+        const extraFields = `Age: ${age}\nTelegram: ${telegram || 'N/A'}\nEmail: ${email || 'N/A'}\nCandidate Type: ${candidateType}\nPreferred Time: ${preferredStudyTime}\nAssigned Level: ${testLevel || 'Auto'}`;
+        
+        telegramService.sendLeadNotification({
+            formType: 'Placement Test Registration',
+            fullname: name,
+            phone: phone,
+            createdAt: new Date().toLocaleString('en-GB'),
+            extraFields: extraFields
+        }).catch(err => console.error('Telegram lead notify error on registration:', err));
+
         // Fetch questions for assigned level
         const query = {};
         if (testLevel) {
@@ -359,40 +370,58 @@ exports.submitTest = async (req, res) => {
 
         const lead = await Lead.findById(testResult.lead).populate('branch');
 
-        const minutes = Math.floor(testResult.timeSpent / 60);
-        const seconds = testResult.timeSpent % 60;
-        const timeStr = `${minutes}m ${seconds}s`;
+        // Extract speaking answer text if present
+        let speakingText = 'N/A';
+        const speakingAnswer = testResult.answers.find(ans => {
+            const q = questionMap[ans.questionId.toString()];
+            return q && q.section && q.section.toLowerCase().includes('speaking');
+        });
+        if (speakingAnswer && speakingAnswer.selectedAnswers && speakingAnswer.selectedAnswers.length > 0) {
+            speakingText = speakingAnswer.selectedAnswers[0];
+        }
 
-        const basicMsg = `━━━━━━━━━━━━━━━━━━
-🔔 <b>New Placement Test Completed!</b>
+        const status = percentage >= 50 ? 'SUCCESS' : 'FAILED';
 
-👤 <b>Name:</b> ${lead.name}
-📞 <b>Phone:</b> ${lead.phone}
-📊 <b>Score:</b> ${percentage}% (${earnedPoints}/${totalPoints} points)
-🎓 <b>Level:</b> <b>${resultStatus}</b>
-━━━━━━━━━━━━━━━━━━`;
+        const rawResultJson = {
+            _id: testResult._id,
+            lead: testResult.lead,
+            score: testResult.score,
+            level: testResult.level,
+            testLevel: testResult.testLevel,
+            earnedPoints: testResult.earnedPoints,
+            totalPoints: testResult.totalPoints,
+            percentage: testResult.percentage,
+            resultStatus: testResult.resultStatus,
+            completionStatus: testResult.completionStatus,
+            startedAt: testResult.startedAt,
+            completedAt: testResult.completedAt,
+            timeSpent: testResult.timeSpent,
+            warnings: testResult.warnings,
+            writingText: testResult.writingText,
+            essayText: testResult.essayText,
+            answers: testResult.answers.map(ans => ({
+                questionId: ans.questionId,
+                selectedAnswers: ans.selectedAnswers,
+                isCorrect: ans.isCorrect
+            }))
+        };
 
-        const detailedMsg = `━━━━━━━━━━━━━━━━━━
-🔔 <b>New Placement Test Completed (Admin Details)</b>
+        // Send Test Result Notifications (handles channel and private admin messages dynamically)
+        telegramService.sendTestResultNotifications({
+            fullname: lead.name,
+            phone: lead.phone,
+            score: percentage,
+            level: resultStatus,
+            status: status,
+            warnings: testResult.warnings || 0,
+            writingText: writingText,
+            essayText: essayText,
+            speakingText: speakingText,
+            ip: req.ip || req.headers['x-forwarded-for'] || 'Unknown',
+            deviceInfo: req.headers['user-agent'] || 'Unknown',
+            rawResultJson: rawResultJson
+        }).catch(err => console.error("Telegram test result notify error:", err));
 
-👤 <b>Name:</b> ${lead.name}
-📞 <b>Phone:</b> ${lead.phone}
-🎂 <b>Age:</b> ${lead.age}
-📊 <b>Score:</b> ${percentage}% (${earnedPoints}/${totalPoints} points)
-🎓 <b>Level:</b> <b>${resultStatus}</b>
-⏱️ <b>Time Spent:</b> ${timeStr}
-⚠️ <b>Warnings:</b> ${testResult.warnings || 0}
-🌐 <b>IP/Device:</b> ${req.ip || 'Unknown'} / ${req.headers['user-agent'] || 'Unknown'}
-
-📝 <b>Writing Text:</b>
-${writingText || 'N/A'}
---
-📝 <b>Essay Text:</b>
-${essayText || 'N/A'}
-━━━━━━━━━━━━━━━━━━`;
-
-        telegramService.sendChannelMessage(basicMsg).catch(err => console.error(err));
-        telegramService.sendAdminMessage(detailedMsg).catch(err => console.error(err));
         await sendEmailAlert(lead, percentage, resultStatus);
 
         res.json({

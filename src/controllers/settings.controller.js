@@ -1,4 +1,6 @@
 const { Setting } = require('../models');
+const { clearResourceCache } = require('../middlewares/responseCache');
+const telegramConfig = require('../services/telegramConfig.service');
 
 exports.getSettings = async (req, res) => {
     try {
@@ -21,6 +23,11 @@ exports.updateSettingsBulk = async (req, res) => {
             );
         });
         await Promise.all(promises);
+
+        // Invalidate cache
+        clearResourceCache('settings');
+        telegramConfig.clearCache();
+
         res.json({ message: 'Settings updated' });
     } catch (err) {
         console.error('Bulk Update Error:', err);

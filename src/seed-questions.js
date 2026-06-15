@@ -16,7 +16,11 @@ const sections = [
 const settings = [
     { key: 'placement_test_timer', value: '60' }, // global timer in minutes
     { key: 'telegram_bot_token', value: '' },
-    { key: 'telegram_chat_id', value: '' },
+    { key: 'telegram_channel_id', value: '' },
+    { key: 'telegram_admin_id', value: '' },
+    { key: 'telegram_enabled', value: 'false' },
+    { key: 'telegram_leads_enabled', value: 'false' },
+    { key: 'telegram_test_results_enabled', value: 'false' },
     { key: 'email_smtp_host', value: '' },
     { key: 'email_smtp_port', value: '465' },
     { key: 'email_user', value: '' },
