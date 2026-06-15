@@ -1,5 +1,7 @@
 const telegramConfig = require('./telegramConfig.service');
+const proxyManager = require('./proxyManager.service');
 const https = require('https');
+const http = require('http');
 
 function escapeHtml(unsafe) {
     if (unsafe === undefined || unsafe === null) return '';
@@ -11,10 +13,14 @@ function escapeHtml(unsafe) {
          .replace(/'/g, "&#039;");
 }
 
-async function sendTelegramRequest(botToken, chatId, messageHTML) {
-    const baseUrl = await telegramConfig.getApiUrl(); // Dynamic Base URL (e.g. proxy or https://api.telegram.org)
-    
-    return new Promise((resolve) => {
+/**
+ * Send a Telegram API request via SOCKS5 proxy with auto-retry/rotation
+ */
+async function sendTelegramRequest(botToken, chatId, messageHTML, retryCount = 0) {
+    const MAX_RETRIES = 2;
+    const baseUrl = await telegramConfig.getApiUrl();
+
+    return new Promise(async (resolve) => {
         if (!botToken || !chatId) {
             console.warn(`[Telegram API Client] Cannot send request: Missing botToken (${!!botToken}) or chatId (${chatId})`);
             return resolve(false);
@@ -29,39 +35,77 @@ async function sendTelegramRequest(botToken, chatId, messageHTML) {
         const url = `${baseUrl.replace(/\/$/, '')}/bot${botToken}/sendMessage`;
         const parsedUrl = new URL(url);
 
+        let agent = null;
+        try {
+            agent = await proxyManager.getAgent();
+        } catch (err) {
+            console.error('[Telegram API Client] Failed to get proxy agent:', err.message);
+        }
+
         const options = {
             hostname: parsedUrl.hostname,
             port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
             path: parsedUrl.pathname + parsedUrl.search,
             method: 'POST',
-            family: 4, // Force IPv4 to bypass broken/unrouted IPv6 on hosting provider
+            family: 4,
             headers: {
                 'Content-Type': 'application/json',
                 'Content-Length': Buffer.byteLength(postData)
-            }
+            },
+            timeout: 15000
         };
 
-        console.log(`[Telegram API Client] Sending request to: ${parsedUrl.origin} | Chat ID: ${chatId}...`);
+        // Attach SOCKS5 proxy agent if available
+        if (agent) {
+            options.agent = agent;
+        }
 
-        const httpModule = parsedUrl.protocol === 'https:' ? require('https') : require('http');
+        const proxyInfo = proxyManager.getCurrentProxyUrl();
+        console.log(`[Telegram API Client] Sending to Chat ID: ${chatId} via proxy: ${proxyInfo}`);
+
+        const httpModule = parsedUrl.protocol === 'https:' ? https : http;
 
         const req = httpModule.request(options, (res) => {
             let body = '';
             res.on('data', chunk => body += chunk);
             res.on('end', () => {
                 if (res.statusCode >= 200 && res.statusCode < 300) {
-                    console.log(`[Telegram API Client] Success: Message sent to Chat ID: ${chatId}`);
+                    console.log(`[Telegram API Client] ✅ Success: Message sent to Chat ID: ${chatId} via ${proxyInfo}`);
                     resolve(true);
                 } else {
-                    console.error(`[Telegram API Client] Error Response from Telegram API (Status: ${res.statusCode}):`, body);
+                    console.error(`[Telegram API Client] ❌ Telegram API error (Status: ${res.statusCode}):`, body);
                     resolve(false);
                 }
             });
         });
 
-        req.on('error', (err) => {
-            console.error(`[Telegram API Client] Network request error sending to Chat ID ${chatId} via ${parsedUrl.origin}:`, err);
-            resolve(false);
+        req.on('timeout', async () => {
+            req.destroy();
+            console.error(`[Telegram API Client] ⏱️ Request timeout for Chat ID: ${chatId} via ${proxyInfo}`);
+
+            if (retryCount < MAX_RETRIES) {
+                console.log(`[Telegram API Client] 🔄 Rotating proxy and retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+                await proxyManager.markCurrentFailed();
+                const result = await sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
+                resolve(result);
+            } else {
+                console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
+                resolve(false);
+            }
+        });
+
+        req.on('error', async (err) => {
+            console.error(`[Telegram API Client] ❌ Network error to Chat ID ${chatId} via ${proxyInfo}:`, err.message);
+
+            if (retryCount < MAX_RETRIES) {
+                console.log(`[Telegram API Client] 🔄 Rotating proxy and retrying (attempt ${retryCount + 1}/${MAX_RETRIES})...`);
+                await proxyManager.markCurrentFailed();
+                const result = await sendTelegramRequest(botToken, chatId, messageHTML, retryCount + 1);
+                resolve(result);
+            } else {
+                console.error(`[Telegram API Client] ❌ All ${MAX_RETRIES} retries exhausted. Giving up.`);
+                resolve(false);
+            }
         });
 
         req.write(postData);
@@ -69,7 +113,7 @@ async function sendTelegramRequest(botToken, chatId, messageHTML) {
     });
 }
 
-// 1. Specific Lead Notification Handler
+// 1. Lead Notification → Admin ID
 exports.sendLeadNotification = async (leadData) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) {
@@ -95,27 +139,20 @@ exports.sendLeadNotification = async (leadData) => {
 
         const { formType, fullname, phone, createdAt, extraFields } = leadData;
 
-        const escapedType = escapeHtml(formType);
-        const escapedName = escapeHtml(fullname);
-        const escapedPhone = escapeHtml(phone);
-        const escapedDate = escapeHtml(createdAt);
-        const escapedExtra = escapeHtml(extraFields);
-
         const messageHTML = `━━━━━━━━━━━━━━━━━━
 📥 <b>NEW LEAD</b>
 
-📌 <b>Type:</b> ${escapedType}
+📌 <b>Type:</b> ${escapeHtml(formType)}
 
-👤 <b>Name:</b> ${escapedName}
-📞 <b>Phone:</b> ${escapedPhone}
+👤 <b>Name:</b> ${escapeHtml(fullname)}
+📞 <b>Phone:</b> ${escapeHtml(phone)}
 
-📅 <b>Date:</b> ${escapedDate}
+📅 <b>Date:</b> ${escapeHtml(createdAt)}
 
 ℹ️ <b>Info:</b>
-${escapedExtra}
+${escapeHtml(extraFields)}
 ━━━━━━━━━━━━━━━━━━`;
 
-        // Sent to Admin ID directly instead of Channel
         return await sendTelegramRequest(botToken, adminId, messageHTML);
     } catch (err) {
         console.error('[Telegram Service] Exception in sendLeadNotification:', err);
@@ -123,7 +160,7 @@ ${escapedExtra}
     }
 };
 
-// 2. Specific Test Result Notifications Handler
+// 2. Test Result Notifications → Admin ID only (channel commented out)
 exports.sendTestResultNotifications = async (testResultData) => {
     try {
         if (!(await telegramConfig.isTelegramEnabled())) {
@@ -144,57 +181,30 @@ exports.sendTestResultNotifications = async (testResultData) => {
         }
 
         const {
-            fullname,
-            phone,
-            score,
-            level,
-            status,
-            warnings,
-            writingText,
-            essayText,
-            speakingText,
-            ip,
-            deviceInfo,
-            rawResultJson
+            fullname, phone, score, level, status, warnings,
+            writingText, essayText, speakingText, ip, deviceInfo, rawResultJson
         } = testResultData;
 
         // A. Channel Message (Public) - COMMENTED OUT AS REQUESTED
         /*
         const channelId = await telegramConfig.getChannelId();
         if (channelId) {
-            const escapedName = escapeHtml(fullname);
-            const escapedPhone = escapeHtml(phone);
-            const escapedLevel = escapeHtml(level);
-            const escapedStatus = escapeHtml(status);
-            const escapedWarnings = escapeHtml(String(warnings));
-
             const channelMsg = `━━━━━━━━━━━━━━━━━━
 🔔 <b>TEST RESULT COMPLETION</b>
 
-👤 <b>Name:</b> ${escapedName}
-📞 <b>Phone:</b> ${escapedPhone}
+👤 <b>Name:</b> ${escapeHtml(fullname)}
+📞 <b>Phone:</b> ${escapeHtml(phone)}
 📊 <b>Score:</b> ${score}%
-🎓 <b>Level:</b> ${escapedLevel}
-🚦 <b>Status:</b> ${escapedStatus}
-⚠️ <b>Warnings:</b> ${escapedWarnings}
+🎓 <b>Level:</b> ${escapeHtml(level)}
+🚦 <b>Status:</b> ${escapeHtml(status)}
+⚠️ <b>Warnings:</b> ${escapeHtml(String(warnings))}
 ━━━━━━━━━━━━━━━━━━`;
-
             await sendTelegramRequest(botToken, channelId, channelMsg);
-        } else {
-            console.log('[Telegram Service] Skipping public channel notification: telegram_channel_id is empty.');
         }
         */
 
         // B. Admin Message (Private)
         if (adminId) {
-            const escapedName = escapeHtml(fullname);
-            const escapedPhone = escapeHtml(phone);
-            const escapedWriting = escapeHtml(writingText);
-            const escapedEssay = escapeHtml(essayText);
-            const escapedSpeaking = escapeHtml(speakingText);
-            const escapedIp = escapeHtml(ip);
-            const escapedDevice = escapeHtml(deviceInfo);
-
             const rawJsonStr = JSON.stringify(rawResultJson, null, 2);
             const escapedJson = escapeHtml(rawJsonStr);
             const truncatedJson = escapedJson.length > 2000 ? escapedJson.substring(0, 2000) + '\n... [TRUNCATED]' : escapedJson;
@@ -202,20 +212,20 @@ exports.sendTestResultNotifications = async (testResultData) => {
             const adminMsg = `━━━━━━━━━━━━━━━━━━
 👤 <b>TEST RESULT DETAILS (ADMIN)</b>
 
-👤 <b>Name:</b> ${escapedName}
-📞 <b>Phone:</b> ${escapedPhone}
+👤 <b>Name:</b> ${escapeHtml(fullname)}
+📞 <b>Phone:</b> ${escapeHtml(phone)}
 
 📝 <b>Writing Text:</b>
-${escapedWriting || 'None'}
+${escapeHtml(writingText) || 'None'}
 
 📝 <b>Essay Text:</b>
-${escapedEssay || 'None'}
+${escapeHtml(essayText) || 'None'}
 
 🗣️ <b>Speaking Text:</b>
-${escapedSpeaking || 'None'}
+${escapeHtml(speakingText) || 'None'}
 
-🌐 <b>IP Address:</b> ${escapedIp}
-📱 <b>Device Info:</b> ${escapedDevice}
+🌐 <b>IP Address:</b> ${escapeHtml(ip)}
+📱 <b>Device Info:</b> ${escapeHtml(deviceInfo)}
 
 ⚙️ <b>Raw Result JSON:</b>
 <pre>${truncatedJson}</pre>
@@ -223,7 +233,7 @@ ${escapedSpeaking || 'None'}
 
             await sendTelegramRequest(botToken, adminId, adminMsg);
         } else {
-            console.log('[Telegram Service] Skipping private admin notification: telegram_admin_id is empty.');
+            console.log('[Telegram Service] Skipping admin notification: telegram_admin_id is empty.');
         }
 
         return true;
