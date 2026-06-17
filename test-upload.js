@@ -4,7 +4,7 @@ const FormData = require('form-data');
 const axios = require('axios');
 
 async function test() {
-    const token = jwt.sign({ id: 'dummy', role: 'admin' }, 'oxfort_secret_key_123');
+    const token = jwt.sign({ id: 'dummy', role: 'admin' }, 'oxford_secret_key_123');
     const form = new FormData();
     form.append('image', fs.createReadStream('package.json'));
 

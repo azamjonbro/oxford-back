@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const { User } = require('../models');
 const { registerSchema, loginSchema } = require('../validations/auth.validation');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'oxfort_secret_key_123';
+const JWT_SECRET = process.env.JWT_SECRET || 'oxford_secret_key_123';
 
 exports.register = async (req, res) => {
     try {
@@ -28,11 +28,11 @@ exports.login = async (req, res) => {
         const username = req.body.username.trim();
         const password = req.body.password;
         const user = await User.findOne({ username });
-        
+
         if (!user) {
             return res.status(400).json({ message: 'User not found in database. Did you run seed?' });
         }
-        
+
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Wrong password for admin. Run seed again.' });

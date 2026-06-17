@@ -64,10 +64,10 @@ app.use('/api/placement/register', submitLimiter);
 app.use('/api/contact', submitLimiter);
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/oxfort')
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/oxford')
     .then(async () => {
         console.log('✅ MongoDB connected (Modular)');
-        
+
         // Auto-seed admin user
         try {
             const { User } = require('./models');

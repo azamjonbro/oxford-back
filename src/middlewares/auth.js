@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'oxfort_secret_key_123';
+const JWT_SECRET = process.env.JWT_SECRET || 'oxford_secret_key_123';
 
 const auth = (req, res, next) => {
     const token = req.header('Authorization')?.replace('Bearer ', '');

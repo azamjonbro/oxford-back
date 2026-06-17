@@ -800,7 +800,7 @@ const questions = [
 
 async function seedQuestions() {
     try {
-        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/oxfort');
+        await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/oxford');
         console.log('✅ Connected to MongoDB for seeding questions...');
 
         // 1. Seed Sections
